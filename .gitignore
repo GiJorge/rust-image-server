@@ -1,0 +1,23 @@
+# --- Rust / Cargo ---
+# Contains all compiled binaries, build artifacts, and dependency cache
+/target/
+
+# --- Local Environment & Secrets ---
+# Keeps your master passwords and specific path strings out of GitHub
+.env
+.env*.local
+
+# --- Application Data (The most critical part for your phone) ---
+# Prevents thousands of your personal source images from uploading to Git
+/images/
+
+# Prevents the cached thumbnails from being synced to version control
+/thumb/
+/thumbnails/
+
+# --- Database Storage ---
+# Keeps your local SQLite storage database files on your phone/device
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
