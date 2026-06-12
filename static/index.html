@@ -9,10 +9,10 @@
     <link href="https://fonts.googleapis.com/css2?family=Advent+Pro:ital,wght@0,100..900;1,100..900&family=Arima:wght@100..700&family=Croissant+One&family=Edu+AU+VIC+WA+NT+Guides&family=Kelly+Slab&family=Smooch+Sans:wght@100..900&family=Special+Elite&display=swap" rel="stylesheet">
     
     <link rel="stylesheet" href="/static/style.css">
+    <script src="/static/app.js" defer></script>
 </head>
 <body>
     <button id="theme-toggle" onclick="toggleTheme()">🌓</button>
-    <button id="lock-btn" onclick="forgetPassword()" style="position: fixed; top: 20px; right: 70px; background: var(--card-bg); color: var(--text-color); border: 2px solid var(--text-color); padding: 8px 12px; border-radius: 20px; cursor: pointer; font-weight: bold; z-index: 1001;">🔒 </button>
     <button id="upload-fab" onclick="triggerUploadCheck()">+</button>
     <input type="file" id="file-input" style="display: none" accept="image/*" onchange="handleUpload(this)">
 
@@ -36,10 +36,29 @@
     <div id="confirm-modal" class="custom-modal-overlay">
         <div class="modal-dialog-box">
             <h3 class="croissant-one-regular" style="color: #ff4d4d;">Confirm Deletion</h3>
-            <p style="font-size: 0.95em; line-height: 1.4;">Are you absolutely sure you want to permanently delete this photo? This cannot be undone.</p>
+            <p style="font-size: 0.95em; line-height: 1.4;">Are you absolutely sure you want to permanently delete this photo?</p>
             <div class="modal-dialog-buttons" style="margin-top: 20px;">
                 <button class="btn-action-cancel" onclick="closeConfirmModal()">Cancel</button>
                 <button class="btn-action-danger" onclick="submitConfirmModal()">Yes, Delete</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="upload-album-modal" class="custom-modal-overlay">
+        <div class="modal-dialog-box">
+            <h3 class="croissant-one-regular">Assign Photo Album</h3>
+            <p style="font-size: 0.9em; opacity: 0.8; margin-bottom: 15px;">Choose where to file this photo:</p>
+            
+            <select id="upload-select-existing" style="width: 93%; padding: 10px; border-radius: 8px; background: var(--bg-color); color: var(--text-color); border: 1px solid var(--border-color); margin-bottom: 10px;" onchange="toggleNewAlbumInputField(this)">
+                <option value="">📁 General Gallery / No Album</option>
+                <option value="__NEW_ALBUM__">➕ [Create New Album / Category...]</option>
+            </select>
+
+            <input type="text" id="upload-new-album-input" placeholder="Type new album name" style="display: none; width: 85%; padding: 10px; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-color); color: var(--text-color);">
+
+            <div class="modal-dialog-buttons" style="margin-top: 15px;">
+                <button class="btn-action-cancel" onclick="closeUploadAlbumModal()">Cancel</button>
+                <button class="btn-action-submit" onclick="submitUploadAlbumModal()">Next: Choose File</button>
             </div>
         </div>
     </div>
@@ -48,12 +67,13 @@
 
     <div class="toolbar">
         <input type="text" id="search-input" placeholder="Search by title..." oninput="triggerFilterReset()">
-
+        <select id="album-select" onchange="triggerFilterReset()">
+            <option value="all">📁 All Albums / General</option>
+        </select>
         <select id="sort-select" onchange="triggerFilterReset()">
             <option value="recent">🆕 Newest First</option>
             <option value="oldest">🔢 Oldest First</option>
         </select>
-
         <select id="size-select" onchange="triggerFilterReset()">
             <option value="all">🖼 Any Size</option>
             <option value="small">📐 Small (&lt; 1MB)</option>
@@ -69,9 +89,7 @@
         <span class="close-btn" onclick="closeModal()">&times;</span>
         <button class="nav-btn prev-btn" onclick="prevImage(event)">&#10094;</button>
         <button class="nav-btn next-btn" onclick="nextImage(event)">&#10095;</button>
-
         <button id="delete-btn" onclick="triggerDeleteCheck(event)" style="position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); background: #ff4d4d; color: white; border: none; font-size: 18px; padding: 10px 24px; border-radius: 20px; cursor: pointer; z-index: 10015; font-weight: bold; box-shadow: 0 4px 10px rgba(0,0,0,0.3);">🗑 Delete Photo</button>
-
         <div class="panzoom-wrapper">
             <img id="modal-img" src="" alt="Full View Window">
         </div>
@@ -80,7 +98,5 @@
     <footer class="simple-footer">
         <p class="croissant-one-regular"> By Bisrat</p>
     </footer>
-
-    <script src="/static/app.js"></script>
 </body>
 </html>

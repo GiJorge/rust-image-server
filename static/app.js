@@ -39,7 +39,6 @@ const observer = new IntersectionObserver((entries) => {
     });
 });
 
-// Custom Password Modal Controllers
 function requestActionAuthorization(callbackAction) {
     const rememberedPassword = sessionStorage.getItem('gallery_session_pwd');
     if (rememberedPassword) {
@@ -47,6 +46,8 @@ function requestActionAuthorization(callbackAction) {
         return;
     }
     activeAuthCallback = callbackAction;
+    
+    // This will now safely work because auth-modal exists in the HTML before execution!
     document.getElementById('auth-modal').style.display = 'flex';
     document.getElementById('auth-password-field').focus();
 }
@@ -56,6 +57,7 @@ function closeAuthModal() {
     document.getElementById('auth-password-field').value = '';
     activeAuthCallback = null;
 }
+
 
 function submitAuthModal() {
     const pwd = document.getElementById('auth-password-field').value;
@@ -81,10 +83,34 @@ function submitConfirmModal() {
     });
 }
 
+// 🔄 Workflow Step 1: Triggered when pressing the '+' FAB button
 function triggerUploadCheck() {
+    // 1. Verify password session authorization first
     requestActionAuthorization(() => {
-        document.getElementById('file-input').click();
+        const mainSelector = document.getElementById('album-select');
+        const uploadSelector = document.getElementById('upload-select-existing');
+        
+        // 2. Clear old options and synchronize current list
+        uploadSelector.innerHTML = '<option value="">📁 General Gallery / No Album</option><option value="__NEW_ALBUM__">➕ [Create New Album / Category...]</option>';
+        
+        Array.from(mainSelector.options).forEach(opt => {
+            if (opt.value !== 'all') {
+                const newOpt = document.createElement('option');
+                newOpt.value = opt.value;
+                newOpt.innerText = opt.innerText;
+                uploadSelector.appendChild(newOpt);
+            }
+        });
+
+        // 3. Reveal the Album option window cleanly
+        document.getElementById('upload-new-album-input').style.display = 'none';
+        document.getElementById('upload-new-album-input').value = '';
+        document.getElementById('upload-album-modal').style.display = 'flex';
     });
+}
+
+function closeUploadAlbumModal() {
+    document.getElementById('upload-album-modal').style.display = 'none';
 }
 
 function triggerDeleteCheck(event) {
@@ -127,65 +153,57 @@ function renderGalleryHTML() {
     });
 }
 
-async function handleUpload(input) {
+
+
+
+function handleUpload(input) {
     if (!input.files || input.files.length === 0) return;
     const password = sessionStorage.getItem('gallery_session_pwd');
-
     const file = input.files[0];
+
     const formData = new FormData();
-    formData.append('image', file);
     formData.append('password', password);
+    formData.append('album', globalSelectedUploadAlbum); 
+    formData.append('image', file); 
 
-    const overlay = document.getElementById('loading-overlay');
-    const status = document.getElementById('upload-status');
-    overlay.style.display = 'flex';
-    status.innerText = `Uploading ${file.name}...`;
+    // ⚡ INSTANT BACKGROUND PROCESSING:
+    // We add the file to your tracking set right away
+    pendingUploads.add(file.name);
+    
+    // We flash a quick confirmation toast or console message instead of freezing the screen
+    console.log(`Started background upload for: ${file.name}`);
 
-    try {
-        pendingUploads.add(file.name);
-        const response = await fetch('/api/upload', { method: 'POST', body: formData });
-
-        if (response.ok) {
-            const data = await response.json();
-            status.innerText = 'Success!';
-            pendingUploads.delete(file.name);
-
-            const activeSearch = document.getElementById('search-input').value.toLowerCase().trim();
-            const activeSort = document.getElementById('sort-select').value;
-            const sizeFilterSetting = document.getElementById('size-select').value;
-            const fileSizeInBytes = file.size;
-
-            const isFiltering = (activeSearch !== "") || (sizeFilterSetting !== "all") || (activeSort !== "recent");
-            let matchesSearch = activeSearch === "" || data.filename.toLowerCase().includes(activeSearch);
-            let matchesSize = true;
-
-            if (sizeFilterSetting === 'small') matchesSize = fileSizeInBytes < 1048576;
-            else if (sizeFilterSetting === 'medium') matchesSize = fileSizeInBytes >= 1048576 && fileSizeInBytes <= 5242880;
-            else if (sizeFilterSetting === 'large') matchesSize = fileSizeInBytes > 5242880;
-
-            if (!isFiltering || (activeSort === 'recent' && matchesSearch && matchesSize)) {
-                allImages.unshift(data.filename);
-                offset += 1;
-                renderGalleryHTML();
+    // 🔥 THE CRITICAL CHANGE: 
+    // We remove 'await' and don't assign fetch to a variable. 
+    // This shoots the request to your Rust server and immediately moves to the next line of code!
+    fetch('/api/upload', { method: 'POST', body: formData })
+        .then(async (response) => {
+            if (response.ok) {
+                pendingUploads.delete(file.name);
+                // Refresh the toolbar dropdown options quietly in the background
+                loadAlbumDropdownOptions();
+            } else if (response.status === 401) {
+                alert("Background upload failed: Unauthorized. Please check your password.");
+                sessionStorage.removeItem('gallery_session_pwd');
             } else {
-                setTimeout(() => { alert(`Uploaded successfully! Clear active filters to see "${file.name}".`); }, 700);
+                const errorText = await response.text();
+                console.error("Background upload error details:", errorText);
             }
-            setTimeout(() => { overlay.style.display = 'none'; }, 600);
-        } else if (response.status === 401) {
-            alert("Unauthorized: Incorrect password.");
-            sessionStorage.removeItem('gallery_session_pwd');
-            overlay.style.display = 'none';
-        } else {
-            const errorText = await response.text();
-            alert("Upload failed: " + errorText);
-            overlay.style.display = 'none';
-        }
-    } catch (err) {
-        console.error(err);
-        overlay.style.display = 'none';
-    }
-    input.value = '';
+        })
+        .catch((err) => {
+            console.error("Network error during background transfer:", err);
+        });
+
+    // ⚡ INSTANT EXIT:
+    // The input field resets and control returns to you immediately. 
+    // Your WebSocket system will automatically trigger `triggerFilterReset()` to display the image when it's ready!
+    input.value = ''; 
 }
+
+
+
+
+
 
 async function executeDeletion(password) {
     const currentFilename = allImages[currentIndex];
@@ -234,6 +252,9 @@ function createCardElement(name, imgIndex) {
     return card;
 }
 
+
+
+// 🔄 Update your loadImages function to pass the selected album filter value to the server:
 async function loadImages() {
     if (loading || !hasMore) return;
     loading = true;
@@ -242,14 +263,16 @@ async function loadImages() {
     const search = document.getElementById('search-input').value;
     const sort = document.getElementById('sort-select').value;
     const sizeValue = document.getElementById('size-select').value;
+    const albumValue = document.getElementById('album-select').value; // 🆕 Fetch option state
 
-    let sizeParams = '';
-    if (sizeValue === 'small') sizeParams = '&max_size=1048576';
-    else if (sizeValue === 'medium') sizeParams = '&min_size=1048576&max_size=5242880';
-    else if (sizeValue === 'large') sizeParams = '&min_size=5242880';
+    let extraParams = '';
+    if (albumValue !== 'all') extraParams += `&album=${encodeURIComponent(albumValue)}`;
+    if (sizeValue === 'small') extraParams += '&max_size=1048576';
+    else if (sizeValue === 'medium') extraParams += '&min_size=1048576&max_size=5242880';
+    else if (sizeValue === 'large') extraParams += '&min_size=5242880';
 
     try {
-        const url = `/api/images?offset=${offset}&limit=${limit}&search=${encodeURIComponent(search)}&sort=${sort}${sizeParams}`;
+        const url = `/api/images?offset=${offset}&limit=${limit}&search=${encodeURIComponent(search)}&sort=${sort}${extraParams}`;
         const response = await fetch(url);
         const data = await response.json();
 
@@ -270,6 +293,105 @@ async function loadImages() {
         loadingIndicator.style.display = 'none';
     }
 }
+
+
+
+let globalSelectedUploadAlbum = ""; 
+
+// 🆕 Toggles the input field display box if the user chooses the "[Create New Album...]" select action item
+function toggleNewAlbumInputField(selectElement) {
+    const inputField = document.getElementById('upload-new-album-input');
+    if (selectElement.value === '__NEW_ALBUM__') {
+        inputField.style.display = 'block';
+        inputField.focus();
+    } else {
+        inputField.style.display = 'none';
+        inputField.value = '';
+    }
+}
+
+// 🔄 Intercepts the click action FAB to open our beautiful custom overlay menu modal configuration block
+function triggerUploadCheck() {
+    requestActionAuthorization(() => {
+        // Build and populate the upload dialog selection options based on existing albums list
+        const mainSelector = document.getElementById('album-select');
+        const uploadSelector = document.getElementById('upload-select-existing');
+        
+        // Synchronize dropdown profiles elements 
+        uploadSelector.innerHTML = '<option value="">📁 General Gallery / No Album</option><option value="__NEW_ALBUM__">➕ [Create New Album / Category...]</option>';
+        
+        // Grab existing album collections parsed directly out of our sidebar main layout selector filters list
+        Array.from(mainSelector.options).forEach(opt => {
+            if (opt.value !== 'all') {
+                const newOpt = document.createElement('option');
+                newOpt.value = opt.value;
+                newOpt.innerText = opt.innerText;
+                uploadSelector.appendChild(newOpt);
+            }
+        });
+
+        // Open the custom selection modal interface
+        document.getElementById('upload-new-album-input').style.display = 'none';
+        document.getElementById('upload-new-album-input').value = '';
+        document.getElementById('upload-album-modal').style.display = 'flex';
+    });
+}
+
+function closeUploadAlbumModal() {
+    document.getElementById('upload-album-modal').style.display = 'none';
+}
+
+// 🔄 Workflow Step 2: Triggered when clicking "Next: Choose File"
+function submitUploadAlbumModal() {
+    const selectVal = document.getElementById('upload-select-existing').value;
+    const inputVal = document.getElementById('upload-new-album-input').value.trim();
+
+    if (selectVal === '__NEW_ALBUM__') {
+        if (!inputVal) {
+            alert("Please type a name for your new album!");
+            return;
+        }
+        globalSelectedUploadAlbum = inputVal;
+    } else {
+        globalSelectedUploadAlbum = selectVal;
+    }
+
+    closeUploadAlbumModal();
+    // Open native browser file selector input
+    document.getElementById('file-input').click();
+}
+
+
+
+// 🔄 Update loadAlbumDropdownOptions to ensure the upload options list refreshes automatically
+async function loadAlbumDropdownOptions() {
+    try {
+        const response = await fetch('/api/albums');
+        if (response.ok) {
+            const data = await response.json();
+            const selector = document.getElementById('album-select');
+            
+            selector.innerHTML = '<option value="all">📁 All Albums / General</option>';
+            
+            data.albums.forEach(albumName => {
+                const opt = document.createElement('option');
+                opt.value = albumName;
+                opt.innerText = `📂 ${albumName}`;
+                selector.appendChild(opt);
+            });
+        }
+    } catch (err) {
+        console.error("Error refreshing active data category choices lists:", err);
+    }
+}
+
+
+
+
+
+
+
+
 
 window.onscroll = () => {
     if ((window.innerHeight + window.scrollY) >= document.body.offsetHeight - 800) {
@@ -405,5 +527,10 @@ function forgetPassword() {
         alert("No password is currently saved in this session.");
     }
 }
+
+
+
+// Call dropdown parsing on startup execution line loop near bottom of file:
+loadAlbumDropdownOptions();
 setupWebSocket();
 loadImages();

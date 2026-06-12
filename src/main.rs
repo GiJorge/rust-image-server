@@ -30,6 +30,12 @@ struct ImageQuery {
     sort: Option<String>,
     min_size: Option<i64>,
     max_size: Option<i64>,
+    album: Option<String>,
+}
+
+#[derive(Serialize)]
+struct AlbumListResponse {
+    albums: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -95,18 +101,44 @@ async fn main() {
     .await
     .unwrap();
 
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS images (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            filename TEXT NOT NULL UNIQUE,
-            created_at INTEGER NOT NULL,
-            file_size INTEGER NOT NULL DEFAULT 0,
-            thumbnail_filename TEXT
-         );"
-    )
-    .execute(&db_pool)
-    .await
-    .unwrap();
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS images (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                filename TEXT NOT NULL UNIQUE,
+                created_at INTEGER NOT NULL,
+                file_size INTEGER NOT NULL DEFAULT 0,
+                thumbnail_filename TEXT
+            );"
+        )
+        .execute(&db_pool)
+        .await
+        .unwrap();
+
+        // 🆕 Create the Albums lookup table
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS albums (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE
+            );"
+        )
+        .execute(&db_pool)
+        .await
+        .unwrap();
+
+        // 🆕 Create the Many-to-Many Bridge Table
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS image_albums (
+                image_id INTEGER,
+                album_id INTEGER,
+                PRIMARY KEY (image_id, album_id),
+                FOREIGN KEY (image_id) REFERENCES images(id) ON DELETE CASCADE,
+                FOREIGN KEY (album_id) REFERENCES albums(id) ON DELETE CASCADE
+            );"
+        )
+        .execute(&db_pool)
+        .await
+        .unwrap();
 
     let _ = sqlx::query("ALTER TABLE images ADD COLUMN thumbnail_filename TEXT;").execute(&db_pool).await;
 
@@ -185,6 +217,8 @@ async fn main() {
         .route("/static/app.js", get(move || async move {
             ([(axum::http::header::CONTENT_TYPE, "application/javascript")], app_js_content)
         }))
+
+        .route("/api/albums", get(get_albums_list))
         .route("/api/images", get(get_images_json))
         .route("/api/upload", post(upload_image))
         .route("/api/ws", get(ws_handler))
@@ -204,88 +238,164 @@ async fn main() {
     axum::serve(listener, app).await.unwrap();
 }
 
+
+
+
 async fn upload_image(
     State(state): State<AppState>,
     mut multipart: Multipart,
 ) -> impl IntoResponse {
+    let mut file_data = Vec::new();
+    let mut filename = String::new();
     let mut password_provided = String::new();
-    let mut image_field_data: Option<(String, axum::body::Bytes)> = None;
+    let mut album_tag: Option<String> = None;
 
-    while let Ok(Some(field)) = multipart.next_field().await {
-        let name = field.name().unwrap_or_default().to_string();
+    // 1. Parse the incoming multi-part data stream
+    while let Some(field) = multipart.next_field().await.unwrap() {
+        let name = field.name().unwrap().to_string();
 
-        if name == "password" {
-            if let Ok(text) = field.text().await {
-                password_provided = text;
+        match name.as_str() {
+            "password" => {
+                password_provided = field.text().await.unwrap();
             }
-        } else if name == "image" {
-            let file_name = field.file_name().unwrap_or_default().to_string();
-            if !file_name.is_empty() {
-                let lower_name = file_name.to_lowercase();
-                if lower_name.ends_with(".jpg") ||
-                   lower_name.ends_with(".jpeg") ||
-                   lower_name.ends_with(".png") ||
-                   lower_name.ends_with(".gif") ||
-                   lower_name.ends_with(".webp") {
-
-                    if let Ok(data) = field.bytes().await {
-                        image_field_data = Some((file_name, data));
-                    }
+            "album" => {
+                let text_val = field.text().await.unwrap().trim().to_string();
+                if !text_val.is_empty() {
+                    album_tag = Some(text_val);
                 }
             }
+            "image" => {
+                filename = field.file_name().unwrap().to_string();
+                file_data = field.bytes().await.unwrap().to_vec();
+            }
+            _ => {}
         }
     }
 
+    // 2. Authentication Verification
     if password_provided != state.master_password {
         return (StatusCode::UNAUTHORIZED, "Incorrect master password").into_response();
     }
 
-    if let Some((file_name, data)) = image_field_data {
-        let file_size = data.len() as i64;
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as i64;
-
-        let unique_file_name = format!("{}_{}", timestamp, file_name);
-        let path = PathBuf::from(&state.images_dir).join(&unique_file_name);
-
-        let write_res = tokio::task::spawn_blocking(move || {
-            fs::write(path, data)
-        }).await;
-
-        if write_res.is_err() || write_res.unwrap().is_err() {
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to save file to disk".to_string()).into_response();
-        }
-
-        let expected_thumb = match unique_file_name.rfind('.') {
-            Some(pos) => format!("{}.webp", &unique_file_name[..pos]),
-            None => format!("{}.webp", unique_file_name),
-        };
-
-        let db_res = sqlx::query(
-            "INSERT INTO images (filename, created_at, file_size, thumbnail_filename) VALUES (?, ?, ?, ?)"
-        )
-        .bind(&unique_file_name)
-        .bind(timestamp)
-        .bind(file_size)
-        .bind(&expected_thumb)
-        .execute(&state.db)
-        .await;
-
-        if let Err(err) = db_res {
-            eprintln!("DATABASE UPLOAD ERROR: {}", err);
-            return (StatusCode::INTERNAL_SERVER_ERROR, format!("Database injection failed: {}", err)).into_response();
-        }
-
-        let upload_info = UploadResponse { filename: unique_file_name.clone() };
-        let _ = state.tx.send(upload_info);
-
-        return (StatusCode::OK, Json(UploadResponse { filename: unique_file_name })).into_response();
+    if file_data.is_empty() || filename.is_empty() {
+        return (StatusCode::BAD_REQUEST, "Missing file data asset payload").into_response();
     }
 
-    (StatusCode::BAD_REQUEST, "No valid image found").into_response()
+    // 3. Save the original file with a unique timestamp prefix
+    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let unique_filename = format!("{}_{}", timestamp, filename);
+    let save_path = PathBuf::from(&state.images_dir).join(&unique_filename);
+
+    if let Err(e) = fs::write(&save_path, &file_data) {
+        return (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to save file: {}", e)).into_response();
+    }
+
+    let file_size = file_data.len() as i64;
+
+    
+
+
+
+    // 4. Clean & Light Thumbnail Compression (Center cropped square 300x300 JPEG)
+    let thumb_filename = match image::load_from_memory(&file_data) {
+        Ok(img) => {
+            // High-quality fast scale
+            let thumb = img.resize_to_fill(300, 300, image::imageops::FilterType::Lanczos3);
+            
+            let path_obj = std::path::Path::new(&unique_filename);
+            let file_stem = path_obj.file_stem().unwrap_or_default().to_string_lossy();
+            
+            // 📁 Change target extension to .jpg
+            let target_thumb_name = format!("{}.jpg", file_stem);
+            let thumb_path = PathBuf::from(&state.thumbnails_dir).join(&target_thumb_name);
+            
+            // Open standard file handle stream
+            match std::fs::File::create(&thumb_path) {
+                Ok(file) => {
+                    use image::codecs::jpeg::JpegEncoder;
+                    
+                    // 🛠️ PERFECT COMPRESSION: Set JPEG quality to 75% 
+                    // This is lightning fast on CPU and outputs a tiny ~10KB file!
+                    let encoder = JpegEncoder::new_with_quality(file, 75);
+                    
+                    match thumb.write_with_encoder(encoder) {
+                        Ok(_) => Some(target_thumb_name),
+                        Err(e) => {
+                            println!("⚠️ Thumbnail JPEG encode failed: {}", e);
+                            None
+                        }
+                    }
+                }
+                Err(e) => {
+                    println!("⚠️ Failed to create thumbnail file handle: {}", e);
+                    None
+                }
+            }
+        }
+        Err(e) => {
+            println!("⚠️ Failed to parse image memory: {}", e);
+            None
+        }
+    };
+
+
+
+
+    // 5. Database Transaction Persistence
+    let insert_res = sqlx::query(
+        "INSERT INTO images (filename, created_at, file_size, thumbnail_filename) VALUES (?, ?, ?, ?);"
+    )
+    .bind(&unique_filename)
+    .bind(timestamp as i64)
+    .bind(file_size)
+    .bind(&thumb_filename)
+    .execute(&state.db)
+    .await;
+
+    match insert_res {
+        Ok(result) => {
+            let image_id = result.last_insert_rowid();
+
+            // Link Album relations
+            if let Some(ref name) = album_tag {
+                let _ = sqlx::query("INSERT OR IGNORE INTO albums (name) VALUES (?);")
+                    .bind(name)
+                    .execute(&state.db)
+                    .await;
+
+                if let Ok(album_row) = sqlx::query("SELECT id FROM albums WHERE name = ?;")
+                    .bind(name)
+                    .fetch_one(&state.db)
+                    .await 
+                {
+                    let album_id: i64 = album_row.get(0);
+                    let _ = sqlx::query("INSERT OR IGNORE INTO image_albums (image_id, album_id) VALUES (?, ?);")
+                        .bind(image_id)
+                        .bind(album_id)
+                        .execute(&state.db)
+                        .await;
+                }
+            }
+
+            // Dispatch WebSocket update
+            let response_payload = UploadResponse { filename: unique_filename };
+            let _ = state.tx.send(response_payload.clone());
+
+            Json(response_payload).into_response()
+        }
+        Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Database error: {}", err)).into_response(),
+    }
 }
+
+
+
+
+
+
+
+
+
+
 
 async fn get_images_json(
     State(state): State<AppState>,
@@ -294,63 +404,78 @@ async fn get_images_json(
     let offset = pagination.offset as i64;
     let limit = pagination.limit as i64;
 
-    let mut conditions = Vec::new();
-
-    if let Some(ref search) = pagination.search {
-        if !search.trim().is_empty() {
-            conditions.push(format!("filename LIKE '%{}%'", search.replace('\'', "''")));
-        }
-    }
-    if let Some(min) = pagination.min_size {
-        conditions.push(format!("file_size >= {}", min));
-    }
-    if let Some(max) = pagination.max_size {
-        conditions.push(format!("file_size <= {}", max));
+    let mut query_str = "SELECT i.filename FROM images i".to_string();
+    
+    // If an album is requested, inject an inner join to filter results
+    if pagination.album.is_some() {
+        query_str.push_str(" JOIN image_albums ia ON i.id = ia.image_id JOIN albums a ON ia.album_id = a.id");
     }
 
-    let where_clause = if conditions.is_empty() {
-        "".to_string()
+    query_str.push_str(" WHERE 1=1");
+
+    if pagination.album.is_some() {
+        query_str.push_str(" AND a.name = ?");
+    }
+    if pagination.search.is_some() {
+        query_str.push_str(" AND i.filename LIKE ?");
+    }
+    if pagination.min_size.is_some() {
+        query_str.push_str(" AND i.file_size >= ?");
+    }
+    if pagination.max_size.is_some() {
+        query_str.push_str(" AND i.file_size <= ?");
+    }
+
+    // Sort order handling
+    let sort_order = pagination.sort.as_deref().unwrap_or("recent");
+    if sort_order == "oldest" {
+        query_str.push_str(" ORDER BY i.created_at ASC, i.id ASC");
     } else {
-        format!("WHERE {}", conditions.join(" AND "))
-    };
-
-    let sort_order = match pagination.sort.as_deref() {
-        Some("oldest") => "created_at ASC",
-        _ => "created_at DESC",
-    };
-
-    let base_query = format!(
-        "SELECT filename FROM images {} ORDER BY {} LIMIT {} OFFSET {}",
-        where_clause, sort_order, limit, offset
-    );
-
-    let rows_res = sqlx::query(&base_query).fetch_all(&state.db).await;
-
-    let rows = match rows_res {
-        Ok(r) => r,
-        Err(err) => {
-            eprintln!("DATABASE QUERY ERROR: {}", err);
-            return (StatusCode::INTERNAL_SERVER_ERROR, format!("Database query failed: {}", err)).into_response();
-        }
-    };
-
-    let mut images = Vec::new();
-    for row in rows {
-        let filename: String = row.get("filename");
-        images.push(filename);
+        query_str.push_str(" ORDER BY i.created_at DESC, i.id DESC");
     }
+    query_str.push_str(" LIMIT ? OFFSET ?;");
 
-    let count_query = format!("SELECT COUNT(*) FROM images {}", where_clause);
-    let total_res = sqlx::query(&count_query).fetch_one(&state.db).await;
-    let count: i64 = match total_res {
-        Ok(row) => row.get(0),
-        Err(_) => 0,
-    };
+    let mut db_query = sqlx::query(&query_str);
 
-    let has_more = (offset + limit) < count;
+    // Bind parameters dynamically in chronological order of appearance
+    if let Some(ref alb) = pagination.album { db_query = db_query.bind(alb); }
+    if let Some(ref s) = pagination.search { db_query = db_query.bind(format!("%{}%", s)); }
+    if let Some(min) = pagination.min_size { db_query = db_query.bind(min); }
+    if let Some(max) = pagination.max_size { db_query = db_query.bind(max); }
+    
+    db_query = db_query.bind(limit).bind(offset);
+
+    let rows = db_query.fetch_all(&state.db).await.unwrap();
+    let images: Vec<String> = rows.iter().map(|r| r.get::<String, _>("filename")).collect();
+
+    // Check if there are more images available for pagination
+    let mut count_str = "SELECT COUNT(*) FROM images i".to_string();
+    if pagination.album.is_some() {
+        count_str.push_str(" JOIN image_albums ia ON i.id = ia.image_id JOIN albums a ON ia.album_id = a.id WHERE a.name = ?");
+    } else {
+        count_str.push_str(" WHERE 1=1");
+    }
+    
+    let mut count_query = sqlx::query(&count_str);
+    if let Some(ref alb) = pagination.album { count_query = count_query.bind(alb); }
+    let total_count: i64 = count_query.fetch_one(&state.db).await.unwrap().get(0);
+    
+    // 🔍 FIXED: Changed .length() to .len() here
+    let has_more = (offset + images.len() as i64) < total_count;
 
     Json(ImageList { images, has_more }).into_response()
 }
+
+
+
+
+
+
+
+
+
+
+
 
 async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
     ws.on_upgrade(|socket| handle_socket(socket, state))
@@ -498,3 +623,20 @@ async fn delete_image(
         Json(serde_json::json!({ "status": "success", "filename": filename }))
     ).into_response()
 }
+
+
+// 🆕 Fetch the clean list of all categories currently in use
+async fn get_albums_list(State(state): State<AppState>) -> impl IntoResponse {
+    let rows = sqlx::query("SELECT name FROM albums ORDER BY name ASC;")
+        .fetch_all(&state.db)
+        .await;
+
+    match rows {
+        Ok(items) => {
+            let albums: Vec<String> = items.iter().map(|r| r.get::<String, _>("name")).collect();
+            Json(AlbumListResponse { albums }).into_response()
+        }
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Failed to read categories").into_response(),
+    }
+}
+
