@@ -4,199 +4,16 @@
     <meta charset="UTF-8">
     <title>Home Image Server</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Advent+Pro:ital,wght@0,100..900;1,100..900&family=Arima:wght@100..700&family=Croissant+One&family=Edu+AU+VIC+WA+NT+Guides&family=Kelly+Slab&family=Smooch+Sans:wght@100..900&family=Special+Elite&display=swap" rel="stylesheet">
-
-    <style>
-        .croissant-one-regular {
-  font-family: "Croissant One", serif;
-  font-weight: 400;
-  font-style: normal;
-}
-
-        :root {
-            --bg-color: #f0f2f5;
-            --text-color: #1c1e21;
-            --card-bg: white;
-            --card-shadow: rgba(0,0,0,0.08);
-            --header-color: #1c1e21;
-            --file-name-color: #4b4f56;
-            --skeleton-bg: #e0e0e0;
-            --accent-color: #7d9eb1;
-            --border-color: #cccccc;
-        }
-        [data-theme="dark"] {
-            --bg-color: #18191a;
-            --text-color: #e4e6eb;
-            --card-bg: #242526;
-            --card-shadow: rgba(0,0,0,0.3);
-            --header-color: #f5f6f7;
-            --file-name-color: #b0b3b8;
-            --skeleton-bg: #3a3b3c;
-            --accent-color: #010811;
-            --border-color: #4e4f50;
-        }
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 10px; background: var(--bg-color); color: var(--text-color); margin: 0; transition: background 0.3s, color 0.3s; }
-        h1 { text-align: center; color: var(--header-color); margin-top: 20px; margin-bottom: 10px; }
-
-        /* Toolbar styles */
-        .toolbar {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 12px;
-            justify-content: center;
-            align-items: center;
-            max-width: 900px;
-            margin: 0 auto 20px;
-            padding: 15px;
-            background: var(--card-bg);
-            border-radius: 12px;
-            box-shadow: 0 4px 12px var(--card-shadow);
-        }
-        .toolbar input, .toolbar select {
-            padding: 8px 14px;
-            border-radius: 8px;
-            border: 1px solid var(--border-color);
-            background: var(--bg-color);
-            color: var(--text-color);
-            font-size: 0.95em;
-            outline: none;
-            transition: border-color 0.2s;
-        }
-        .toolbar input:focus, .toolbar select:focus { border-color: var(--accent-color); }
-        .toolbar input[type="text"] { min-width: 240px; flex-grow: 1; }
-
-        .container { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; padding: 10px; }
-        
-        /* Mobile Media Query (Placed at the bottom of the file) */
-@media screen and (max-width: 768px) {
-  .container { display: flex; flex-wrap: wrap; gap: 34px; justify-content: center; padding: 10px; }
-       
-}
-        
-        .card {
-            background: var(--card-bg); padding: 10px; border-radius: 12px;
-            box-shadow: 0 4px 12px var(--card-shadow); text-align: center;
-            width: 120px; transition: transform 0.2s, background 0.3s; cursor: pointer;
-        }
-        .card:hover { transform: translateY(-5px); }
-        .thumb-container {
-            width: 120px; height: 160px; overflow: hidden; border-radius: 8px;
-            margin: 0 auto 5px; background: var(--skeleton-bg); display: flex;
-            align-items: center; justify-content: center;
-        }
-        .thumb-container img { width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 0.3s; }
-        .thumb-container img.loaded { opacity: 1; }
-        .file-name { font-size: 0.85em; font-weight: 600; color: var(--file-name-color); word-break: break-all; height: 1.2em; overflow: hidden; }
-
-        #theme-toggle {
-            position: fixed; top: 20px; right: 20px;
-            background: var(--card-bg); color: var(--text-color);
-            border: 2px solid var(--text-color); padding: 8px 15px;
-            border-radius: 20px; cursor: pointer; font-weight: bold;
-            z-index: 1001;
-        }
-        #upload-fab {
-            position: fixed; bottom: 30px; right: 30px;
-            width: 60px; height: 60px; border-radius: 30px;
-            background: var(--accent-color); color: white;
-            border: none; font-size: 30px; cursor: pointer;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.3); z-index: 1001;
-            display: flex; align-items: center; justify-content: center;
-        }
-        #loading-overlay {
-            display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0,0,0,0.7); z-index: 3000;
-            flex-direction: column; align-items: center; justify-content: center; color: white;
-        }
-        .spinner {
-            border: 4px solid rgba(255,255,255,0.3); border-radius: 50%;
-            border-top: 4px solid white; width: 40px; height: 40px;
-            animation: spin 1s linear infinite; margin-bottom: 15px;
-        }
-        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-
-        /* BACKDROP */
-        #modal-container {
-            display: none;
-            position: fixed;
-            top: 0; left: 0; right: 0; bottom: 0;
-            width: 100%; height: 100%;
-            background: rgba(0, 0, 0, 0.95);
-            z-index: 9999;
-            overflow: hidden;
-        }
-
-        /* CONTAINER FOR IMAGE BOUNDS */
-        .panzoom-wrapper {
-            position: absolute;
-            top: 0; left: 0;
-            width: 100%; height: 100%;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-        }
-
-        /* HARD-CENTERED IMAGE VIA CSS-ONLY MATH */
-        #modal-img {
-            max-width: 95%;
-            max-height: 95%;
-            object-fit: contain;
-            display: block;
-            user-select: none;
-            -webkit-user-drag: none;
-            touch-action: none; /* Block browser intervention */
-            transition: transform 0.05s ease-out; /* Buttery tracking responses */
-            transform-origin: center center;
-        }
-
-        /* FIXED INTERACTIVE ACTION CONTROLS */
-        .nav-btn {
-            position: absolute;
-            top: 50%;
-            transform: translateY(-50%);
-            background: rgba(255, 255, 255, 0.2);
-            color: white;
-            border: none;
-            font-size: 35px;
-            padding: 12px 20px;
-            cursor: pointer;
-            z-index: 10010;
-            border-radius: 8px;
-            user-select: none;
-        }
-        .prev-btn { left: 20px; }
-        .next-btn { right: 20px; }
-
-        .close-btn {
-            position: absolute;
-            top: 20px; right: 30px;
-            color: #fff;
-            font-size: 45px; font-weight: bold;
-            cursor: pointer;
-            z-index: 10015;
-            user-select: none;
-        }
-
-        .simple-footer {
-  width: 100%;
-  padding: 20px 0;
-  
-
-  text-align: center;
-  font-family: sans-serif;
-  font-size: 14px;
-}
-
-.simple-footer p {
-  margin: 0;
-}
-    </style>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Advent+Pro:ital,wght@0,100..900;1,100..900&family=Arima:wght@100..700&family=Croissant+One&family=Edu+AU+VIC+WA+NT+Guides&family=Kelly+Slab&family=Smooch+Sans:wght@100..900&family=Special+Elite&display=swap" rel="stylesheet">
+    
+    <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
     <button id="theme-toggle" onclick="toggleTheme()">🌓</button>
-    <button id="upload-fab" onclick="document.getElementById('file-input').click()">+</button>
+    <button id="lock-btn" onclick="forgetPassword()" style="position: fixed; top: 20px; right: 70px; background: var(--card-bg); color: var(--text-color); border: 2px solid var(--text-color); padding: 8px 12px; border-radius: 20px; cursor: pointer; font-weight: bold; z-index: 1001;">🔒 </button>
+    <button id="upload-fab" onclick="triggerUploadCheck()">+</button>
     <input type="file" id="file-input" style="display: none" accept="image/*" onchange="handleUpload(this)">
 
     <div id="loading-overlay">
@@ -204,7 +21,30 @@
         <div id="upload-status">Uploading...</div>
     </div>
 
-    <h1 class="croissant-one-regular ">Home Image Gallery</h1>
+    <div id="auth-modal" class="custom-modal-overlay">
+        <div class="modal-dialog-box">
+            <h3 class="croissant-one-regular">Admin Authorization</h3>
+            <p style="font-size: 0.9em; opacity: 0.8;">Enter password to execute action.</p>
+            <input type="password" id="auth-password-field" placeholder="Master Password" onkeydown="if(event.key==='Enter') submitAuthModal()">
+            <div class="modal-dialog-buttons">
+                <button class="btn-action-cancel" onclick="closeAuthModal()">Cancel</button>
+                <button class="btn-action-submit" onclick="submitAuthModal()">Verify</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="confirm-modal" class="custom-modal-overlay">
+        <div class="modal-dialog-box">
+            <h3 class="croissant-one-regular" style="color: #ff4d4d;">Confirm Deletion</h3>
+            <p style="font-size: 0.95em; line-height: 1.4;">Are you absolutely sure you want to permanently delete this photo? This cannot be undone.</p>
+            <div class="modal-dialog-buttons" style="margin-top: 20px;">
+                <button class="btn-action-cancel" onclick="closeConfirmModal()">Cancel</button>
+                <button class="btn-action-danger" onclick="submitConfirmModal()">Yes, Delete</button>
+            </div>
+        </div>
+    </div>
+
+    <h1 class="croissant-one-regular">Home Image Gallery</h1>
 
     <div class="toolbar">
         <input type="text" id="search-input" placeholder="Search by title..." oninput="triggerFilterReset()">
@@ -225,439 +65,22 @@
     <div class="container" id="gallery"></div>
     <div id="loading-indicator">Loading more...</div>
 
- <div id="modal-container" onclick="closeModalTarget(event)">
+    <div id="modal-container" onclick="closeModalTarget(event)">
         <span class="close-btn" onclick="closeModal()">&times;</span>
         <button class="nav-btn prev-btn" onclick="prevImage(event)">&#10094;</button>
         <button class="nav-btn next-btn" onclick="nextImage(event)">&#10095;</button>
-        
-        <button id="delete-btn" onclick="promptDelete(event)" style="position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); background: #ff4d4d; color: white; border: none; font-size: 18px; padding: 10px 24px; border-radius: 20px; cursor: pointer; z-index: 10015; font-weight: bold; box-shadow: 0 4px 10px rgba(0,0,0,0.3);">🗑 Delete Photo</button>
-        
+
+        <button id="delete-btn" onclick="triggerDeleteCheck(event)" style="position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); background: #ff4d4d; color: white; border: none; font-size: 18px; padding: 10px 24px; border-radius: 20px; cursor: pointer; z-index: 10015; font-weight: bold; box-shadow: 0 4px 10px rgba(0,0,0,0.3);">🗑 Delete Photo</button>
+
         <div class="panzoom-wrapper">
             <img id="modal-img" src="" alt="Full View Window">
         </div>
     </div>
 
-    <script>
-        function toggleTheme() {
-            const currentTheme = document.documentElement.getAttribute('data-theme');
-            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
-            document.documentElement.setAttribute('data-theme', newTheme);
-            localStorage.setItem('theme', newTheme);
-        }
-        const savedTheme = localStorage.getItem('theme') || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
-        document.documentElement.setAttribute('data-theme', savedTheme);
-
-        let allImages = [];
-        let currentIndex = 0;
-        let offset = 0;
-        const limit = 30;
-        let loading = false;
-        let hasMore = true;
-        let debounceTimer;
-        const pendingUploads = new Set();
-
-        const gallery = document.getElementById('gallery');
-        const loadingIndicator = document.getElementById('loading-indicator');
-
-        // Tracking state metrics for native zoom gestures
-        let scale = 1;
-        let startScale = 1;
-        let startDistance = 0;
-        let isDragging = false;
-        let startX = 0, startY = 0;
-        let translateX = 0, translateY = 0;
-
-        const observer = new IntersectionObserver((entries) => {
-            entries.forEach(entry => {
-                if (entry.isIntersecting) {
-                    const img = entry.target;
-                    img.src = img.dataset.src;
-                    img.onload = () => { img.classList.add('loaded'); };
-                    observer.unobserve(img);
-                }
-            });
-        });
-
-        function triggerFilterReset() {
-            clearTimeout(debounceTimer);
-            debounceTimer = setTimeout(() => {
-                allImages = [];
-                offset = 0;
-                hasMore = true;
-                gallery.innerHTML = '';
-                loadImages();
-            }, 300);
-        }
-
-        function renderGalleryHTML() {
-            gallery.innerHTML = '';
-            allImages.forEach((name, imgIndex) => {
-                const card = document.createElement('div');
-                card.className = 'card';
-                card.onclick = () => openModal(imgIndex);
-           
-   
-   // 'name' is the original filename from the database (e.g., "1718243100000_photo.jpg")
-// We target the .webp thumbnail by dropping the old extension and adding .webp
-const cleanBase = name.substring(0, name.lastIndexOf('.'));
-const thumbFilename = cleanBase + '.webp';
-
-card.innerHTML = `
-    <div class="thumb-container">
-        <img data-src="/thumb/${thumbFilename}" alt="${name}">
-    </div>
-    <div class="file-name">${name.replace(/^\d+_/, '')}</div>
-`;
-
-
-                gallery.appendChild(card);
-                const imgElement = card.querySelector('img');
-                observer.observe(imgElement);
-            });
-        }
-
-      
-async function handleUpload(input) {
-            if (!input.files || input.files.length === 0) return;
-            
-            // 1. Prompt for the master password before starting the upload
-            const password = prompt("Enter master password to upload photos:");
-            if (password === null) {
-                input.value = '';
-                return; // User cancelled
-            }
-            if (password.trim() === "") {
-                alert("Password cannot be blank.");
-                input.value = '';
-                return;
-            }
-
-            const file = input.files[0];
-            const formData = new FormData();
-            formData.append('image', file);
-            formData.append('password', password); // 2. Send the password along with the image
-
-            const overlay = document.getElementById('loading-overlay');
-            const status = document.getElementById('upload-status');
-            overlay.style.display = 'flex';
-            status.innerText = `Uploading ${file.name}...`;
-
-            try {
-                pendingUploads.add(file.name);
-                const response = await fetch('/api/upload', { method: 'POST', body: formData });
-
-                if (response.ok) {
-                    const data = await response.json();
-                    status.innerText = 'Success!';
-                    pendingUploads.delete(file.name);
-
-                    const activeSearch = document.getElementById('search-input').value.toLowerCase().trim();
-                    const activeSort = document.getElementById('sort-select').value;
-                    const sizeFilterSetting = document.getElementById('size-select').value;
-                    const fileSizeInBytes = file.size;
-
-                    const isFiltering = (activeSearch !== "") || (sizeFilterSetting !== "all") || (activeSort !== "recent");
-                    let matchesSearch = activeSearch === "" || data.filename.toLowerCase().includes(activeSearch);
-                    let matchesSize = true;
-
-                    if (sizeFilterSetting === 'small') matchesSize = fileSizeInBytes < 1048576;
-                    else if (sizeFilterSetting === 'medium') matchesSize = fileSizeInBytes >= 1048576 && fileSizeInBytes <= 5242880;
-                    else if (sizeFilterSetting === 'large') matchesSize = fileSizeInBytes > 5242880;
-
-                    if (!isFiltering || (activeSort === 'recent' && matchesSearch && matchesSize)) {
-                        allImages.unshift(data.filename);
-                        offset += 1;
-                        renderGalleryHTML();
-                    } else {
-                        setTimeout(() => { alert(`Uploaded successfully! Clear your active filters to see "${file.name}".`); }, 700);
-                    }
-                    setTimeout(() => { overlay.style.display = 'none'; }, 600);
-                } else {
-                    const errorText = await response.text();
-                    alert("Upload failed: " + errorText);
-                    overlay.style.display = 'none';
-                }
-            } catch (err) {
-                console.error(err);
-                overlay.style.display = 'none';
-            }
-            input.value = '';
-        }
-
-        function createCardElement(name, imgIndex) {
-            const card = document.createElement('div');
-            card.className = 'card';
-            card.onclick = () => openModal(imgIndex);
-            card.innerHTML = `
-                <div class="thumb-container">
-                    <img data-src="/thumb/${name.substring(0, name.lastIndexOf('.'))}.webp" alt="${name}">
-                </div>
-                <div class="file-name">${name.replace(/^\d+_/, '')}</div>
-            `;
-            return card;
-        }
-
-        async function loadImages() {
-            if (loading || !hasMore) return;
-            loading = true;
-            loadingIndicator.style.display = 'block';
-
-            const search = document.getElementById('search-input').value;
-            const sort = document.getElementById('sort-select').value;
-            const sizeValue = document.getElementById('size-select').value;
-
-            let sizeParams = '';
-            if (sizeValue === 'small') sizeParams = '&max_size=1048576';
-            else if (sizeValue === 'medium') sizeParams = '&min_size=1048576&max_size=5242880';
-            else if (sizeValue === 'large') sizeParams = '&min_size=5242880';
-
-            try {
-                const url = `/api/images?offset=${offset}&limit=${limit}&search=${encodeURIComponent(search)}&sort=${sort}${sizeParams}`;
-                const response = await fetch(url);
-                const data = await response.json();
-
-                data.images.forEach((name) => {
-                    const imgIndex = allImages.length;
-                    allImages.push(name);
-                    const card = createCardElement(name, imgIndex);
-                    gallery.appendChild(card);
-                    observer.observe(card.querySelector('img'));
-                });
-
-                offset += data.images.length;
-                hasMore = data.has_more;
-            } catch (err) {
-                console.error(err);
-            } finally {
-                loading = false;
-                loadingIndicator.style.display = 'none';
-            }
-        }
-
-        window.onscroll = () => {
-            if ((window.innerHeight + window.scrollY) >= document.body.offsetHeight - 800) {
-                loadImages();
-            }
-        };
-
-        // Update CSS Transforms natively
-        function updateTransform() {
-            const modalImg = document.getElementById('modal-img');
-            if (modalImg) {
-                modalImg.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
-            }
-        }
-
-        function openModal(imgIndex) {
-            currentIndex = imgIndex;
-            const name = allImages[currentIndex];
-            if (!name) return;
-
-            const container = document.getElementById('modal-container');
-            const modalImg = document.getElementById('modal-img');
-
-            if (!container || !modalImg) return;
-
-            // Explicitly force hard coordinate math reset
-            scale = 1;
-            translateX = 0;
-            translateY = 0;
-            modalImg.style.transform = 'translate(0px, 0px) scale(1)';
-            
-            modalImg.src = `/images/${name}`;
-            container.style.display = 'block';
-        }
-
-        function closeModal() {
-            const container = document.getElementById('modal-container');
-            const modalImg = document.getElementById('modal-img');
-            if (container) container.style.display = 'none';
-            if (modalImg) modalImg.src = '';
-        }
-
-        function closeModalTarget(event) {
-            if (event.target.id === 'modal-container' || event.target.className === 'panzoom-wrapper') {
-                closeModal();
-            }
-        }
-
-        function nextImage(event) {
-            if (event) event.stopPropagation();
-            openModal((currentIndex + 1) >= allImages.length ? 0 : currentIndex + 1);
-        }
-
-        function prevImage(event) {
-            if (event) event.stopPropagation();
-            openModal((currentIndex - 1) < 0 ? allImages.length - 1 : currentIndex - 1);
-        }
-
-      
-        // --- MULTI-PLATFORM GESTURE ENGINE (DESKTOP MOUSE + MOBILE TOUCH) ---
-        const wrapper = document.querySelector('.panzoom-wrapper');
-        const modalImg = document.getElementById('modal-img');
-
-        // 1. Desktop Mouse Wheel Zooming Function
-        wrapper.addEventListener('wheel', (e) => {
-            e.preventDefault();
-            const zoomFactor = 0.15;
-            if (e.deltaY < 0) {
-                scale = Math.min(scale + zoomFactor, 6);
-            } else {
-                scale = Math.max(scale - zoomFactor, 1);
-                if (scale === 1) { translateX = 0; translateY = 0; } // Auto-recenter
-            }
-            updateTransform();
-        }, { passive: false });
-
-        // 2. Mobile Touch Event Handlers
-        wrapper.addEventListener('touchstart', (e) => {
-            if (e.touches.length === 1) {
-                isDragging = true;
-                startX = e.touches[0].clientX - translateX;
-                startY = e.touches[0].clientY - translateY;
-            } else if (e.touches.length === 2) {
-                isDragging = false;
-                startScale = scale;
-                startDistance = Math.hypot(
-                    e.touches[0].clientX - e.touches[1].clientX,
-                    e.touches[0].clientY - e.touches[1].clientY
-                );
-            }
-        }, { passive: true });
-
-        wrapper.addEventListener('touchmove', (e) => {
-            if (e.touches.length === 1 && isDragging && scale > 1) {
-                translateX = e.touches[0].clientX - startX;
-                translateY = e.touches[0].clientY - startY;
-                updateTransform();
-            } else if (e.touches.length === 2) {
-                const currentDistance = Math.hypot(
-                    e.touches[0].clientX - e.touches[1].clientX,
-                    e.touches[0].clientY - e.touches[1].clientY
-                );
-                const factor = currentDistance / startDistance;
-                scale = Math.max(1, Math.min(startScale * factor, 6));
-                if (scale === 1) { translateX = 0; translateY = 0; }
-                updateTransform();
-            }
-        }, { passive: true });
-
-        wrapper.addEventListener('touchend', () => { isDragging = false; });
-
-
-        // 3. Desktop Mouse Click-and-Drag Panning Handlers
-        wrapper.addEventListener('mousedown', (e) => {
-            // Only allow dragging if zoomed in and using the primary left click
-            if (scale > 1 && e.button === 0) {
-                isDragging = true;
-                wrapper.style.cursor = 'grabbing';
-                startX = e.clientX - translateX;
-                startY = e.clientY - translateY;
-            }
-        });
-
-        window.addEventListener('mousemove', (e) => {
-            if (isDragging && scale > 1) {
-                translateX = e.clientX - startX;
-                translateY = e.clientY - startY;
-                updateTransform();
-            }
-        });
-
-        window.addEventListener('mouseup', () => {
-            if (isDragging) {
-                isDragging = false;
-                wrapper.style.cursor = 'default';
-            }
-        });
-
-
-
-
-
-
-        wrapper.addEventListener('touchend', () => { isDragging = false; });
-
-        function setupWebSocket() {
-            const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const socket = new WebSocket(`${wsProtocol}//${window.location.host}/api/ws`);
-            socket.onmessage = (event) => {
-                try {
-                    const data = JSON.parse(event.data);
-                    const originalNameFromWebsocket = data.filename.replace(/^\d+_/, '');
-                    if (allImages.includes(data.filename) || pendingUploads.has(originalNameFromWebsocket)) {
-                        pendingUploads.delete(originalNameFromWebsocket);
-                        return;
-                    }
-                    allImages.unshift(data.filename);
-                    offset += 1;
-                    renderGalleryHTML();
-                } catch (err) { console.error(err); }
-            };
-            socket.onclose = () => { setTimeout(() => { setupWebSocket(); }, 2000); };
-        }
-
-async function promptDelete(event) {
-            if (event) event.stopPropagation(); // Stop background modal window from closing
-            
-            const currentFilename = allImages[currentIndex];
-            if (!currentFilename) return;
-
-            // 1. Prompt user for password natively via browser alert field
-            const password = prompt("Enter master password to permanently delete this photo:");
-            if (password === null) return; // User clicked cancel
-            if (password.trim() === "") {
-                alert("Password cannot be blank.");
-                return;
-            }
-
-            // 2. Send request to backend
-            try {
-                const response = await fetch('/api/delete', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ filename: currentFilename, password: password })
-                });
-
-                if (response.ok) {
-                    alert("Image successfully deleted.");
-                    
-                    // 3. Remove the image from our frontend array memory matching state
-                    allImages.splice(currentIndex, 1);
-                    offset = Math.max(0, offset - 1); // Compensate pagination tracking count
-                    
-                    // 4. Update UI: Re-render list display grid instantly
-                    renderGalleryHTML();
-                    
-                    // If there are still images left, view the next one, otherwise close modal
-                    if (allImages.length > 0) {
-                        openModal(currentIndex >= allImages.length ? 0 : currentIndex);
-                    } else {
-                        closeModal();
-                    }
-                } else {
-                    const errorText = await response.text();
-                    alert("Deletion failed: " + errorText);
-                }
-            } catch (err) {
-                console.error("Error deleting image:", err);
-                alert("Network error trying to process deletion requests.");
-            }
-        }
-        
-        setupWebSocket();
-        loadImages();
-
-
-
-
-
-
-
-        
-    </script>
     <footer class="simple-footer">
-  <p class="croissant-one-regular "> By Bisrat</p>
-</footer>
+        <p class="croissant-one-regular"> By Bisrat</p>
+    </footer>
+
+    <script src="/static/app.js"></script>
 </body>
 </html>

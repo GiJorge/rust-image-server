@@ -1,0 +1,172 @@
+.croissant-one-regular {
+    font-family: "Croissant One", serif;
+    font-weight: 400;
+    font-style: normal;
+}
+
+:root {
+    --bg-color: #f0f2f5;
+    --text-color: #1c1e21;
+    --card-bg: white;
+    --card-shadow: rgba(0,0,0,0.08);
+    --header-color: #1c1e21;
+    --file-name-color: #4b4f56;
+    --skeleton-bg: #e0e0e0;
+    --accent-color: #7d9eb1;
+    --border-color: #cccccc;
+}
+
+[data-theme="dark"] {
+    --bg-color: #18191a;
+    --text-color: #e4e6eb;
+    --card-bg: #242526;
+    --card-shadow: rgba(0,0,0,0.3);
+    --header-color: #f5f6f7;
+    --file-name-color: #b0b3b8;
+    --skeleton-bg: #3a3b3c;
+    --accent-color: #010811;
+    --border-color: #4e4f50;
+}
+
+body { 
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+    padding: 10px; 
+    background: var(--bg-color); 
+    color: var(--text-color); 
+    margin: 0; 
+    transition: background 0.3s, color 0.3s; 
+}
+
+h1 { text-align: center; color: var(--header-color); margin-top: 20px; margin-bottom: 10px; }
+
+.toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    justify-content: center;
+    align-items: center;
+    max-width: 900px;
+    margin: 0 auto 20px;
+    padding: 15px;
+    background: var(--card-bg);
+    border-radius: 12px;
+    box-shadow: 0 4px 12px var(--card-shadow);
+}
+
+.toolbar input, .toolbar select {
+    padding: 8px 14px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-color);
+    color: var(--text-color);
+    font-size: 0.95em;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+.toolbar input:focus, .toolbar select:focus { border-color: var(--accent-color); }
+.toolbar input[type="text"] { min-width: 240px; flex-grow: 1; }
+
+.container { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; padding: 10px; }
+
+@media screen and (max-width: 768px) {
+    .container { display: flex; flex-wrap: wrap; gap: 34px; justify-content: center; padding: 10px; }
+}
+
+.card {
+    background: var(--card-bg); padding: 10px; border-radius: 12px;
+    box-shadow: 0 4px 12px var(--card-shadow); text-align: center;
+    width: 120px; transition: transform 0.2s, background 0.3s; cursor: pointer;
+}
+.card:hover { transform: translateY(-5px); }
+
+.thumb-container {
+    width: 120px; height: 160px; overflow: hidden; border-radius: 8px;
+    margin: 0 auto 5px; background: var(--skeleton-bg); display: flex;
+    align-items: center; justify-content: center;
+}
+.thumb-container img { width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 0.3s; }
+.thumb-container img.loaded { opacity: 1; }
+.file-name { font-size: 0.85em; font-weight: 600; color: var(--file-name-color); word-break: break-all; height: 1.2em; overflow: hidden; }
+
+#theme-toggle {
+    position: fixed; top: 20px; right: 20px;
+    background: var(--card-bg); color: var(--text-color);
+    border: 2px solid var(--text-color); padding: 8px 15px;
+    border-radius: 20px; cursor: pointer; font-weight: bold;
+    z-index: 1001;
+}
+
+#upload-fab {
+    position: fixed; bottom: 30px; right: 30px;
+    width: 60px; height: 60px; border-radius: 30px;
+    background: var(--accent-color); color: white;
+    border: none; font-size: 30px; cursor: pointer;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.3); z-index: 1001;
+    display: flex; align-items: center; justify-content: center;
+}
+
+#loading-overlay {
+    display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(0,0,0,0.7); z-index: 3000;
+    flex-direction: column; align-items: center; justify-content: center; color: white;
+}
+
+.spinner {
+    border: 4px solid rgba(255,255,255,0.3); border-radius: 50%;
+    border-top: 4px solid white; width: 40px; height: 40px;
+    animation: spin 1s linear infinite; margin-bottom: 15px;
+}
+@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+/* Shared Overlay System for Custom Modals (Password & Confirmation) */
+.custom-modal-overlay {
+    display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(0,0,0,0.6); backdrop-filter: blur(4px); z-index: 20000;
+    align-items: center; justify-content: center;
+}
+
+.modal-dialog-box {
+    background: var(--card-bg); padding: 25px; border-radius: 16px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.3); text-align: center; width: 290px;
+}
+.modal-dialog-box h3 { margin-top: 0; color: var(--header-color); }
+.modal-dialog-box input {
+    width: 85%; padding: 10px; margin: 15px 0; border-radius: 8px;
+    border: 1px solid var(--border-color); background: var(--bg-color); color: var(--text-color);
+}
+.modal-dialog-buttons { display: flex; gap: 10px; justify-content: center; }
+.modal-dialog-buttons button {
+    padding: 8px 18px; border-radius: 8px; border: none; font-weight: bold; cursor: pointer;
+}
+.btn-action-submit { background: var(--accent-color); color: white; }
+.btn-action-danger { background: #ff4d4d; color: white; }
+.btn-action-cancel { background: #999; color: white; }
+
+#modal-container {
+    display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    width: 100%; height: 100%; background: rgba(0, 0, 0, 0.95); z-index: 9999; overflow: hidden;
+}
+
+.panzoom-wrapper {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    display: flex; justify-content: center; align-items: center;
+}
+
+#modal-img {
+    max-width: 95%; max-height: 95%; object-fit: contain; display: block;
+    user-select: none; -webkit-user-drag: none; touch-action: none;
+    transition: transform 0.05s ease-out; transform-origin: center center;
+}
+
+.nav-btn {
+    position: absolute; top: 50%; transform: translateY(-50%);
+    background: rgba(255, 255, 255, 0.2); color: white; border: none;
+    font-size: 35px; padding: 12px 20px; cursor: pointer; z-index: 10010; border-radius: 8px; user-select: none;
+}
+.prev-btn { left: 20px; }
+.next-btn { right: 20px; }
+.close-btn { position: absolute; top: 20px; right: 30px; color: #fff; font-size: 45px; font-weight: bold; cursor: pointer; z-index: 10015; user-select: none; }
+.simple-footer { width: 100%; padding: 20px 0; text-align: center; font-family: sans-serif; font-size: 14px; }
+.simple-footer p { margin: 0; }
+ #loading-indicator { text-align: center; padding: 20px; width: 100%; display: none; font-weight: bold; color: #666; }

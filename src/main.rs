@@ -6,7 +6,6 @@ use axum::{
     routing::{get, post},
     Router,
 };
-
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::net::SocketAddr;
@@ -20,7 +19,7 @@ use tokio::sync::broadcast;
 #[derive(Deserialize)]
 struct DeleteRequest {
     filename: String,
-    password: String,
+    password: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -62,7 +61,6 @@ async fn main() {
         .parse()
         .unwrap_or(3000);
 
-    // 1. Environment-Aware Path Auto-Detection
     let is_termux = std::path::Path::new("/data/data/com.termux/files/home").exists();
 
     let (images_dir, thumbnails_dir) = if is_termux {
@@ -81,7 +79,6 @@ async fn main() {
 
     let db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite://gallery.db".to_string());
 
-    // Safe Directory Guard Check: Prevents Android from resetting or wiping the directory out on boot
     if !std::path::Path::new(&images_dir).exists() {
         let _ = fs::create_dir_all(&images_dir);
     }
@@ -113,10 +110,7 @@ async fn main() {
 
     let _ = sqlx::query("ALTER TABLE images ADD COLUMN thumbnail_filename TEXT;").execute(&db_pool).await;
 
-
-
-// --- SAFE STARTUP SCANNING ---
-    println!("🔄 Running startup synchronization scan...");
+    // --- SAFE STARTUP SCANNING ---
     if let Ok(entries) = fs::read_dir(&images_dir) {
         for entry in entries.flatten() {
             if let Some(name) = entry.file_name().to_str() {
@@ -127,7 +121,6 @@ async fn main() {
                    lower_name.ends_with(".gif") ||
                    lower_name.ends_with(".webp") {
 
-                    // 1. Check if this file is ALREADY tracked in the database
                     let already_exists = sqlx::query("SELECT 1 FROM images WHERE filename = ?")
                         .bind(name)
                         .fetch_optional(&db_pool)
@@ -135,10 +128,7 @@ async fn main() {
                         .map(|opt| opt.is_some())
                         .unwrap_or(false);
 
-                    // 2. Only touch the file if the database has absolutely no record of it
                     if !already_exists {
-                        println!("🆕 Found untracked local image: {}", name);
-                        
                         let metadata = entry.metadata().ok();
                         let size = metadata.as_ref().map(|m| m.len() as i64).unwrap_or(0);
 
@@ -155,7 +145,6 @@ async fn main() {
                             None => format!("{}.webp", name),
                         };
 
-                        // Insert the new file into the database so it's tracked instantly
                         let _ = sqlx::query(
                             "INSERT OR IGNORE INTO images (filename, created_at, file_size, thumbnail_filename) VALUES (?, ?, ?, ?)"
                         )
@@ -170,12 +159,12 @@ async fn main() {
             }
         }
     }
-    println!("✅ Startup scan finished.");
-
 
     let master_password = std::env::var("MASTER_PASSWORD").unwrap_or_else(|_| "@jo111".to_string());
     let (tx, _rx) = broadcast::channel(16);
     let index_html_content = include_str!("../static/index.html");
+    let style_css_content = include_str!("../static/style.css");
+    let app_js_content = include_str!("../static/app.js");
 
     let state = AppState {
         db: db_pool,
@@ -187,11 +176,20 @@ async fn main() {
 
     let app = Router::new()
         .route("/", get(move || async move { Html(index_html_content) }))
+        // 🆕 Serve the CSS asset dynamically from the binary memory
+        .route("/static/style.css", get(move || async move {
+            ([(axum::http::header::CONTENT_TYPE, "text/css")], style_css_content)
+        }))
+        
+        // 🆕 Serve the JS asset dynamically from the binary memory
+        .route("/static/app.js", get(move || async move {
+            ([(axum::http::header::CONTENT_TYPE, "application/javascript")], app_js_content)
+        }))
         .route("/api/images", get(get_images_json))
         .route("/api/upload", post(upload_image))
         .route("/api/ws", get(ws_handler))
-        .route("/thumb/:filename", get(get_thumbnail)) // URL updated to reflect clean name context
-        .route("/api/delete", axum::routing::post(delete_image))
+        .route("/thumb/:filename", get(get_thumbnail))
+        .route("/api/delete", post(delete_image))
         .nest_service("/images", ServeDir::new(&images_dir))
         .with_state(state)
         .layer(
@@ -210,7 +208,6 @@ async fn upload_image(
     State(state): State<AppState>,
     mut multipart: Multipart,
 ) -> impl IntoResponse {
-    let master_password = &state.master_password;
     let mut password_provided = String::new();
     let mut image_field_data: Option<(String, axum::body::Bytes)> = None;
 
@@ -239,8 +236,8 @@ async fn upload_image(
         }
     }
 
-    if &password_provided != master_password {
-        return (StatusCode::UNAUTHORIZED, "Incorrect upload password").into_response();
+    if password_provided != state.master_password {
+        return (StatusCode::UNAUTHORIZED, "Incorrect master password").into_response();
     }
 
     if let Some((file_name, data)) = image_field_data {
@@ -382,11 +379,6 @@ async fn get_thumbnail(
         }
     }
 
-   let _row_res = sqlx::query("SELECT filename, thumbnail_filename FROM images WHERE thumbnail_filename = ? LIMIT 1")
-    .bind(&filename)
-        .fetch_optional(&state.db)
-        .await;
-
     let base_stem = match filename.rfind('.') {
         Some(pos) => &filename[..pos],
         None => &filename,
@@ -471,10 +463,8 @@ async fn delete_image(
     State(state): State<AppState>,
     Json(req): Json<DeleteRequest>,
 ) -> impl IntoResponse {
-    let master_password = &state.master_password;
-
-    if &req.password != master_password {
-        return (StatusCode::UNAUTHORIZED, "Incorrect delete password").into_response();
+    if req.password.as_deref() != Some(&state.master_password) {
+        return (StatusCode::UNAUTHORIZED, "Incorrect master password").into_response();
     }
 
     let filename = &req.filename;
