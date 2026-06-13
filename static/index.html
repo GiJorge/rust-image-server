@@ -21,52 +21,58 @@
         <div id="upload-status">Uploading...</div>
     </div>
 
-    <div id="auth-modal" class="custom-modal-overlay">
-        <div class="modal-dialog-box">
-            <h3 class="croissant-one-regular">Admin Authorization</h3>
-            <p style="font-size: 0.9em; opacity: 0.8;">Enter password to execute action.</p>
-            <input type="password" id="auth-password-field" placeholder="Master Password" onkeydown="if(event.key==='Enter') submitAuthModal()">
-            <div class="modal-dialog-buttons">
-                <button class="btn-action-cancel" onclick="closeAuthModal()">Cancel</button>
-                <button class="btn-action-submit" onclick="submitAuthModal()">Verify</button>
+    <div id="auth-modal" class="modal-overlay">
+        <div class="modal-box">
+            <h3>🔒 Admin Authentication</h3>
+            <p>Please enter your master password to execute this action:</p>
+            <input type="password" id="auth-password-field" placeholder="Enter Password..." onkeydown="if(event.key==='Enter') submitAuthModal()">
+            <div class="modal-buttons">
+                <button class="btn-action btn-action-submit" onclick="submitAuthModal()">Confirm</button>
+                <button class="btn-action btn-action-cancel" onclick="closeAuthModal()">Cancel</button>
             </div>
         </div>
     </div>
 
-    <div id="confirm-modal" class="custom-modal-overlay">
-        <div class="modal-dialog-box">
-            <h3 class="croissant-one-regular" style="color: #ff4d4d;">Confirm Deletion</h3>
-            <p style="font-size: 0.95em; line-height: 1.4;">Are you absolutely sure you want to permanently delete this photo?</p>
-            <div class="modal-dialog-buttons" style="margin-top: 20px;">
-                <button class="btn-action-cancel" onclick="closeConfirmModal()">Cancel</button>
-                <button class="btn-action-danger" onclick="submitConfirmModal()">Yes, Delete</button>
+    <div id="confirm-modal" class="modal-overlay">
+        <div class="modal-box">
+            <h3>🗑️ Confirm Deletion</h3>
+            <p>Are you absolutely sure you want to permanently erase this photo from local disk arrays?</p>
+            <div class="modal-buttons">
+                <button class="btn-action btn-action-danger" onclick="submitConfirmModal()">Delete File</button>
+                <button class="btn-action btn-action-cancel" onclick="closeConfirmModal()">Cancel</button>
             </div>
         </div>
     </div>
 
-    <div id="upload-album-modal" class="custom-modal-overlay">
-        <div class="modal-dialog-box">
-            <h3 class="croissant-one-regular">Assign Photo Album</h3>
-            <p style="font-size: 0.9em; opacity: 0.8; margin-bottom: 15px;">Choose where to file this photo:</p>
-            
-            <select id="upload-select-existing" style="width: 93%; padding: 10px; border-radius: 8px; background: var(--bg-color); color: var(--text-color); border: 1px solid var(--border-color); margin-bottom: 10px;" onchange="toggleNewAlbumInputField(this)">
-                <option value="">📁 General Gallery / No Album</option>
-                <option value="__NEW_ALBUM__">➕ [Create New Album / Category...]</option>
-            </select>
-
-            <input type="text" id="upload-new-album-input" placeholder="Type new album name" style="display: none; width: 85%; padding: 10px; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-color); color: var(--text-color);">
-
-            <div class="modal-dialog-buttons" style="margin-top: 15px;">
-                <button class="btn-action-cancel" onclick="closeUploadAlbumModal()">Cancel</button>
-                <button class="btn-action-submit" onclick="submitUploadAlbumModal()">Next: Choose File</button>
+    <div id="upload-album-modal" class="modal-overlay">
+        <div class="modal-box">
+            <h3>📂 Choose Upload Destination</h3>
+            <p>Select target destination storage album folder category:</p>
+            <select id="upload-select-existing" onchange="toggleNewAlbumInputField(this)"></select>
+            <input type="text" id="upload-new-album-input" placeholder="Type new album folder name..." style="display: none; margin-top: 10px; width: 100%; padding: 8px; box-sizing: border-box;">
+            <div class="modal-buttons">
+                <button class="btn-action btn-action-submit" onclick="submitUploadAlbumModal()">Continue</button>
+                <button class="btn-action btn-action-cancel" onclick="closeUploadAlbumModal()">Cancel</button>
             </div>
         </div>
     </div>
 
-    <h1 class="croissant-one-regular">Home Image Gallery</h1>
+    <div id="assign-existing-album-modal" class="modal-overlay">
+        <div class="modal-box">
+            <h3>🏷️ Move to Album / Category</h3>
+            <p>Select destination category folder for this photo:</p>
+            <select id="assign-select-existing" shortcut-dropdown-trigger="change" onchange="toggleExistingNewAlbumInputField(this)"></select>
+            <input type="text" id="assign-new-album-input" placeholder="Type new album folder name..." style="display: none; margin-top: 10px; width: 100%; padding: 8px; box-sizing: border-box;">
+            <div class="modal-buttons">
+                <button class="btn-action btn-action-submit" onclick="submitExistingAlbumAssign()">Save Assignment</button>
+                <button class="btn-action btn-action-cancel" onclick="closeAssignAlbumModal()">Cancel</button>
+            </div>
+        </div>
+    </div>
 
     <div class="toolbar">
-        <input type="text" id="search-input" placeholder="Search by title..." oninput="triggerFilterReset()">
+        <button onclick="forgetPassword()" style="background: none; border: 1px solid var(--border-color); color: var(--text-color); padding: 5px 10px; border-radius: 5px; cursor: pointer; font-size: 12px; margin-right: auto;">🔐 Clear Session</button>
+        <input type="text" id="search-input" placeholder="🔍 Search filenames..." oninput="triggerFilterReset()">
         <select id="album-select" onchange="triggerFilterReset()">
             <option value="all">📁 All Albums / General</option>
         </select>
@@ -89,14 +95,16 @@
         <span class="close-btn" onclick="closeModal()">&times;</span>
         <button class="nav-btn prev-btn" onclick="prevImage(event)">&#10094;</button>
         <button class="nav-btn next-btn" onclick="nextImage(event)">&#10095;</button>
-        <button id="delete-btn" onclick="triggerDeleteCheck(event)" style="position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); background: #ff4d4d; color: white; border: none; font-size: 18px; padding: 10px 24px; border-radius: 20px; cursor: pointer; z-index: 10015; font-weight: bold; box-shadow: 0 4px 10px rgba(0,0,0,0.3);">🗑 Delete Photo</button>
+        
+        <div style="position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); display: flex; gap: 12px; z-index: 10015;">
+            <button id="delete-btn" onclick="triggerDeleteCheck(event)" style="background: #ff4d4d; color: white; border: none; font-size: 16px; padding: 10px 20px; border-radius: 20px; cursor: pointer; font-weight: bold; box-shadow: 0 4px 10px rgba(0,0,0,0.3);">🗑️ Delete</button>
+            
+            <button id="set-album-btn" onclick="triggerExistingAlbumAssign(event)" style="background: #4da6ff; color: white; border: none; font-size: 16px; padding: 10px 20px; border-radius: 20px; cursor: pointer; font-weight: bold; box-shadow: 0 4px 10px rgba(0,0,0,0.3);">📁 Set Album</button>
+        </div>
+
         <div class="panzoom-wrapper">
-            <img id="modal-img" src="" alt="Full View Window">
+            <img id="modal-img" src="" alt="Full Screen Resolution Display View">
         </div>
     </div>
-
-    <footer class="simple-footer">
-        <p class="croissant-one-regular"> By Bisrat</p>
-    </footer>
 </body>
 </html>

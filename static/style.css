@@ -170,3 +170,139 @@ h1 { text-align: center; color: var(--header-color); margin-top: 20px; margin-bo
 .simple-footer { width: 100%; padding: 20px 0; text-align: center; font-family: sans-serif; font-size: 14px; }
 .simple-footer p { margin: 0; }
  #loading-indicator { text-align: center; padding: 20px; width: 100%; display: none; font-weight: bold; color: #666; }
+
+
+
+
+
+ /* --- Fix Viewer Layout Control Buttons Positioning Panel --- */
+#modal-container button[id="delete-btn"],
+#modal-container button[id="set-album-btn"] {
+    position: relative !important;
+    bottom: auto !important;
+    left: auto !important;
+    transform: none !important;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    letter-spacing: 0.5px;
+    transition: all 0.2s ease-in-out;
+}
+
+#modal-container button[id="delete-btn"]:hover {
+    background: #ff3333 !important;
+    transform: translateY(-2px);
+    box-shadow: 0 6px 15px rgba(255, 77, 77, 0.4) !important;
+}
+
+#modal-container button[id="set-album-btn"]:hover {
+    background: #3399ff !important;
+    transform: translateY(-2px);
+    box-shadow: 0 6px 15px rgba(77, 166, 255, 0.4) !important;
+}
+
+/* --- Universal Styles for the New Custom Overlay Modals --- */
+.modal-overlay {
+    display: none; 
+    position: fixed; 
+    top: 0; 
+    left: 0; 
+    width: 100%; 
+    height: 100%; 
+    background: rgba(0, 0, 0, 0.6); 
+    backdrop-filter: blur(4px);
+    z-index: 20000; 
+    justify-content: center; 
+    align-items: center;
+    animation: fadeInModal 0.2s ease-out;
+}
+
+.modal-box {
+    background: var(--card-bg);
+    color: var(--text-color);
+    padding: 24px;
+    border-radius: 16px;
+    width: 90%;
+    max-width: 400px;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.25);
+    text-align: center;
+    border: 1px solid var(--border-color);
+}
+
+.modal-box h3 {
+    margin-top: 0;
+    margin-bottom: 12px;
+    font-size: 1.3em;
+}
+
+.modal-box p {
+    font-size: 0.95em;
+    color: var(--file-name-color);
+    margin-bottom: 20px;
+    line-height: 1.4;
+}
+
+.modal-box select, .modal-box input[type="text"] {
+    width: 100%;
+    padding: 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-color);
+    color: var(--text-color);
+    box-sizing: border-box;
+    font-size: 14px;
+    margin-bottom: 15px;
+}
+
+.modal-buttons {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    margin-top: 15px;
+}
+
+.btn-action {
+    padding: 10px 20px;
+    border: none;
+    border-radius: 8px;
+    font-weight: bold;
+    cursor: pointer;
+    font-size: 14px;
+    transition: transform 0.1s ease;
+}
+
+.btn-action:active {
+    transform: scale(0.97);
+}
+
+.btn-action-submit { background: #2ecc71; color: white; }
+.btn-action-danger { background: #ff4d4d; color: white; }
+.btn-action-cancel { background: #7f8c8d; color: white; }
+
+@keyframes fadeInModal {
+    from { opacity: 0; transform: scale(0.95); }
+    to { opacity: 1; transform: scale(1); }
+}
+
+/* --- Floating Album Badge Rule Overlays --- */
+.thumb-container {
+    position: relative; /* Make sure the badge anchors inside the image bounds */
+}
+
+.image-album-badge {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    background: rgba(0, 0, 0, 0.65);
+    color: #ffffff;
+    padding: 4px 8px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    z-index: 10;
+    pointer-events: none; /* Mouse clicks pass right through to open the viewer */
+    backdrop-filter: blur(4px);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    max-width: 80%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}

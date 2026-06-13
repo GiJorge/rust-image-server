@@ -17,3 +17,4 @@ sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "macros"] }
 dotenvy = "0.15"
 exif = { package = "kamadak-exif", version = "0.6" }
 actix-web = "4.13.0"
+rexif = "0.7"

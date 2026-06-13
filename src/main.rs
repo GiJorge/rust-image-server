@@ -22,6 +22,21 @@ struct DeleteRequest {
     password: Option<String>,
 }
 
+// 🆕 Define a clean structure to pass file and album details together
+#[derive(Serialize)]
+struct ImageItem {
+    filename: String,
+    album: String,
+}
+
+// 🛠️ CUSTOM DESERIALIZER: Matches the Assign Album API payload parameters
+#[derive(Deserialize)]
+struct AssignAlbumRequest {
+    filename: String,
+    album: String,
+    password: Option<String>,
+}
+
 #[derive(Deserialize)]
 struct ImageQuery {
     offset: usize,
@@ -40,13 +55,15 @@ struct AlbumListResponse {
 
 #[derive(Serialize)]
 struct ImageList {
-    images: Vec<String>,
+    images: Vec<ImageItem>,
     has_more: bool,
 }
 
+// Extra fields matching live stream sync pipelines
 #[derive(Serialize, Clone)]
 struct UploadResponse {
     filename: String,
+    album: String,
 }
 
 #[derive(Clone)]
@@ -70,13 +87,11 @@ async fn main() {
     let is_termux = std::path::Path::new("/data/data/com.termux/files/home").exists();
 
     let (images_dir, thumbnails_dir) = if is_termux {
-        println!("📱 Production Environment Detected (Termux)");
         (
             "/data/data/com.termux/files/home/images".to_string(),
             "/data/data/com.termux/files/home/thumb".to_string()
         )
     } else {
-        println!("💻 Development Environment Detected (Debian)");
         (
             std::env::var("IMAGES_DIR").unwrap_or_else(|_| "./images".to_string()),
             std::env::var("THUMBNAILS_DIR").unwrap_or_else(|_| "./thumb".to_string())
@@ -85,12 +100,8 @@ async fn main() {
 
     let db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite://gallery.db".to_string());
 
-    if !std::path::Path::new(&images_dir).exists() {
-        let _ = fs::create_dir_all(&images_dir);
-    }
-    if !std::path::Path::new(&thumbnails_dir).exists() {
-        let _ = fs::create_dir_all(&thumbnails_dir);
-    }
+    let _ = fs::create_dir_all(&images_dir);
+    let _ = fs::create_dir_all(&thumbnails_dir);
 
     let db_filename = db_url.replace("sqlite://", "");
     let db_pool = SqlitePool::connect_with(
@@ -101,145 +112,46 @@ async fn main() {
     .await
     .unwrap();
 
-
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS images (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                filename TEXT NOT NULL UNIQUE,
-                created_at INTEGER NOT NULL,
-                file_size INTEGER NOT NULL DEFAULT 0,
-                thumbnail_filename TEXT
-            );"
-        )
-        .execute(&db_pool)
-        .await
-        .unwrap();
-
-        // 🆕 Create the Albums lookup table
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS albums (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL UNIQUE
-            );"
-        )
-        .execute(&db_pool)
-        .await
-        .unwrap();
-
-        // 🆕 Create the Many-to-Many Bridge Table
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS image_albums (
-                image_id INTEGER,
-                album_id INTEGER,
-                PRIMARY KEY (image_id, album_id),
-                FOREIGN KEY (image_id) REFERENCES images(id) ON DELETE CASCADE,
-                FOREIGN KEY (album_id) REFERENCES albums(id) ON DELETE CASCADE
-            );"
-        )
-        .execute(&db_pool)
-        .await
-        .unwrap();
-
-    let _ = sqlx::query("ALTER TABLE images ADD COLUMN thumbnail_filename TEXT;").execute(&db_pool).await;
-
-    // --- SAFE STARTUP SCANNING ---
-    if let Ok(entries) = fs::read_dir(&images_dir) {
-        for entry in entries.flatten() {
-            if let Some(name) = entry.file_name().to_str() {
-                let lower_name = name.to_lowercase();
-                if lower_name.ends_with(".jpg") ||
-                   lower_name.ends_with(".jpeg") ||
-                   lower_name.ends_with(".png") ||
-                   lower_name.ends_with(".gif") ||
-                   lower_name.ends_with(".webp") {
-
-                    let already_exists = sqlx::query("SELECT 1 FROM images WHERE filename = ?")
-                        .bind(name)
-                        .fetch_optional(&db_pool)
-                        .await
-                        .map(|opt| opt.is_some())
-                        .unwrap_or(false);
-
-                    if !already_exists {
-                        let metadata = entry.metadata().ok();
-                        let size = metadata.as_ref().map(|m| m.len() as i64).unwrap_or(0);
-
-                        let file_time = metadata.as_ref()
-                            .and_then(|m| m.created().or_else(|_| m.modified()).ok())
-                            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                            .map(|d| d.as_millis() as i64)
-                            .unwrap_or_else(|| {
-                                SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as i64
-                            });
-
-                        let expected_thumb = match name.rfind('.') {
-                            Some(pos) => format!("{}.webp", &name[..pos]),
-                            None => format!("{}.webp", name),
-                        };
-
-                        let _ = sqlx::query(
-                            "INSERT OR IGNORE INTO images (filename, created_at, file_size, thumbnail_filename) VALUES (?, ?, ?, ?)"
-                        )
-                        .bind(name)
-                        .bind(file_time)
-                        .bind(size)
-                        .bind(expected_thumb)
-                        .execute(&db_pool)
-                        .await;
-                    }
-                }
-            }
-        }
-    }
-
     let master_password = std::env::var("MASTER_PASSWORD").unwrap_or_else(|_| "@jo111".to_string());
     let (tx, _rx) = broadcast::channel(16);
+    
     let index_html_content = include_str!("../static/index.html");
     let style_css_content = include_str!("../static/style.css");
     let app_js_content = include_str!("../static/app.js");
 
     let state = AppState {
         db: db_pool,
-        images_dir: images_dir.clone(),
-        thumbnails_dir: thumbnails_dir.clone(),
+        images_dir,
+        thumbnails_dir,
         tx,
         master_password,
     };
 
     let app = Router::new()
         .route("/", get(move || async move { Html(index_html_content) }))
-        // 🆕 Serve the CSS asset dynamically from the binary memory
         .route("/static/style.css", get(move || async move {
-            ([(axum::http::header::CONTENT_TYPE, "text/css")], style_css_content)
+            ([(header::CONTENT_TYPE, "text/css")], style_css_content)
         }))
-        
-        // 🆕 Serve the JS asset dynamically from the binary memory
         .route("/static/app.js", get(move || async move {
-            ([(axum::http::header::CONTENT_TYPE, "application/javascript")], app_js_content)
+            ([(header::CONTENT_TYPE, "application/javascript")], app_js_content)
         }))
-
         .route("/api/albums", get(get_albums_list))
         .route("/api/images", get(get_images_json))
         .route("/api/upload", post(upload_image))
+        // Registering the custom assign album post routing endpoint
+        .route("/api/images/assign_album", post(assign_album_to_existing_image))
         .route("/api/ws", get(ws_handler))
         .route("/thumb/:filename", get(get_thumbnail))
         .route("/api/delete", post(delete_image))
-        .nest_service("/images", ServeDir::new(&images_dir))
+        .nest_service("/images", ServeDir::new(&state.images_dir))
         .with_state(state)
-        .layer(
-            ServiceBuilder::new()
-                .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
-        );
+        .layer(ServiceBuilder::new().layer(DefaultBodyLimit::max(50 * 1024 * 1024)));
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    println!("Server running on http://{}", addr);
-
+     println!("Server running on http://{}", addr);
     axum::serve(listener, app).await.unwrap();
 }
-
-
-
 
 async fn upload_image(
     State(state): State<AppState>,
@@ -250,19 +162,13 @@ async fn upload_image(
     let mut password_provided = String::new();
     let mut album_tag: Option<String> = None;
 
-    // 1. Parse the incoming multi-part data stream
     while let Some(field) = multipart.next_field().await.unwrap() {
         let name = field.name().unwrap().to_string();
-
         match name.as_str() {
-            "password" => {
-                password_provided = field.text().await.unwrap();
-            }
+            "password" => { password_provided = field.text().await.unwrap(); }
             "album" => {
                 let text_val = field.text().await.unwrap().trim().to_string();
-                if !text_val.is_empty() {
-                    album_tag = Some(text_val);
-                }
+                if !text_val.is_empty() { album_tag = Some(text_val); }
             }
             "image" => {
                 filename = field.file_name().unwrap().to_string();
@@ -272,124 +178,89 @@ async fn upload_image(
         }
     }
 
-    // 2. Authentication Verification
     if password_provided != state.master_password {
         return (StatusCode::UNAUTHORIZED, "Incorrect master password").into_response();
     }
 
-    if file_data.is_empty() || filename.is_empty() {
-        return (StatusCode::BAD_REQUEST, "Missing file data asset payload").into_response();
-    }
-
-    // 3. Save the original file with a unique timestamp prefix
     let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
     let unique_filename = format!("{}_{}", timestamp, filename);
     let save_path = PathBuf::from(&state.images_dir).join(&unique_filename);
 
-    if let Err(e) = fs::write(&save_path, &file_data) {
-        return (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to save file: {}", e)).into_response();
+    if fs::write(&save_path, &file_data).is_err() {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to write file").into_response();
     }
 
     let file_size = file_data.len() as i64;
+    let clean_album = album_tag.unwrap_or_default();
 
-    
-
-
-
-    // 4. Clean & Light Thumbnail Compression (Center cropped square 300x300 JPEG)
-    let thumb_filename = match image::load_from_memory(&file_data) {
-        Ok(img) => {
-            // High-quality fast scale
-            let thumb = img.resize_to_fill(300, 300, image::imageops::FilterType::Lanczos3);
-            
-            let path_obj = std::path::Path::new(&unique_filename);
-            let file_stem = path_obj.file_stem().unwrap_or_default().to_string_lossy();
-            
-            // 📁 Change target extension to .jpg
-            let target_thumb_name = format!("{}.jpg", file_stem);
-            let thumb_path = PathBuf::from(&state.thumbnails_dir).join(&target_thumb_name);
-            
-            // Open standard file handle stream
-            match std::fs::File::create(&thumb_path) {
-                Ok(file) => {
-                    use image::codecs::jpeg::JpegEncoder;
-                    
-                    // 🛠️ PERFECT COMPRESSION: Set JPEG quality to 75% 
-                    // This is lightning fast on CPU and outputs a tiny ~10KB file!
-                    let encoder = JpegEncoder::new_with_quality(file, 75);
-                    
-                    match thumb.write_with_encoder(encoder) {
-                        Ok(_) => Some(target_thumb_name),
-                        Err(e) => {
-                            println!("⚠️ Thumbnail JPEG encode failed: {}", e);
-                            None
-                        }
-                    }
-                }
-                Err(e) => {
-                    println!("⚠️ Failed to create thumbnail file handle: {}", e);
-                    None
-                }
-            }
-        }
-        Err(e) => {
-            println!("⚠️ Failed to parse image memory: {}", e);
-            None
-        }
-    };
-
-
-
-
-    // 5. Database Transaction Persistence
     let insert_res = sqlx::query(
-        "INSERT INTO images (filename, created_at, file_size, thumbnail_filename) VALUES (?, ?, ?, ?);"
+        "INSERT INTO images (filename, created_at, file_size) VALUES (?, ?, ?);"
     )
     .bind(&unique_filename)
     .bind(timestamp as i64)
     .bind(file_size)
-    .bind(&thumb_filename)
     .execute(&state.db)
     .await;
 
-    match insert_res {
-        Ok(result) => {
-            let image_id = result.last_insert_rowid();
-
-            // Link Album relations
-            if let Some(ref name) = album_tag {
-                let _ = sqlx::query("INSERT OR IGNORE INTO albums (name) VALUES (?);")
-                    .bind(name)
-                    .execute(&state.db)
-                    .await;
-
-                if let Ok(album_row) = sqlx::query("SELECT id FROM albums WHERE name = ?;")
-                    .bind(name)
-                    .fetch_one(&state.db)
-                    .await 
-                {
-                    let album_id: i64 = album_row.get(0);
-                    let _ = sqlx::query("INSERT OR IGNORE INTO image_albums (image_id, album_id) VALUES (?, ?);")
-                        .bind(image_id)
-                        .bind(album_id)
-                        .execute(&state.db)
-                        .await;
-                }
+    if let Ok(result) = insert_res {
+        let image_id = result.last_insert_rowid();
+        if !clean_album.is_empty() {
+            let _ = sqlx::query("INSERT OR IGNORE INTO albums (name) VALUES (?);").bind(&clean_album).execute(&state.db).await;
+            if let Ok(row) = sqlx::query("SELECT id FROM albums WHERE name = ?;").bind(&clean_album).fetch_one(&state.db).await {
+                let album_id: i64 = row.get(0);
+                let _ = sqlx::query("INSERT OR IGNORE INTO image_albums (image_id, album_id) VALUES (?, ?);").bind(image_id).bind(album_id).execute(&state.db).await;
             }
-
-            // Dispatch WebSocket update
-            let response_payload = UploadResponse { filename: unique_filename };
-            let _ = state.tx.send(response_payload.clone());
-
-            Json(response_payload).into_response()
         }
-        Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Database error: {}", err)).into_response(),
+        
+        let response_payload = UploadResponse { filename: unique_filename, album: clean_album };
+        let _ = state.tx.send(response_payload.clone());
+        return Json(response_payload).into_response();
     }
+
+
+
+
+    (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response()
 }
 
+// 🛠️ CUSTOM HANDLER: Assigns albums to existing photos cleanly without modifying core vectors
+async fn assign_album_to_existing_image(
+    State(state): State<AppState>,
+    Json(req): Json<AssignAlbumRequest>,
+) -> impl IntoResponse {
+    if req.password.as_deref() != Some(&state.master_password) {
+        return (StatusCode::UNAUTHORIZED, "Incorrect master password").into_response();
+    }
 
+    let img_row = sqlx::query("SELECT id FROM images WHERE filename = ?;")
+        .bind(&req.filename)
+        .fetch_optional(&state.db)
+        .await;
 
+    if let Ok(Some(row)) = img_row {
+        let image_id: i64 = row.get(0);
+        let _ = sqlx::query("DELETE FROM image_albums WHERE image_id = ?;").bind(image_id).execute(&state.db).await;
 
+        if !req.album.is_empty() {
+            let _ = sqlx::query("INSERT OR IGNORE INTO albums (name) VALUES (?);").bind(&req.album).execute(&state.db).await;
+            if let Ok(alb_row) = sqlx::query("SELECT id FROM albums WHERE name = ?;").bind(&req.album).fetch_one(&state.db).await {
+                let album_id: i64 = alb_row.get(0);
+                let _ = sqlx::query("INSERT OR IGNORE INTO image_albums (image_id, album_id) VALUES (?, ?);").bind(image_id).bind(album_id).execute(&state.db).await;
+            }
+        }
+
+        // 🆕 BROADCAST THE UPDATE: Notify all open browsers about the new album alignment!
+        let response_payload = UploadResponse { 
+            filename: req.filename.clone(), 
+            album: req.album.clone() 
+        };
+        let _ = state.tx.send(response_payload);
+
+        return StatusCode::OK.into_response();
+    }
+
+    (StatusCode::NOT_FOUND, "Image metadata record missing").into_response()
+}
 
 
 
@@ -404,73 +275,82 @@ async fn get_images_json(
     let offset = pagination.offset as i64;
     let limit = pagination.limit as i64;
 
-    let mut query_str = "SELECT i.filename FROM images i".to_string();
-    
-    // If an album is requested, inject an inner join to filter results
-    if pagination.album.is_some() {
-        query_str.push_str(" JOIN image_albums ia ON i.id = ia.image_id JOIN albums a ON ia.album_id = a.id");
-    }
+    // 1. SELECT both the filename and its matching album name dynamically
+    let mut query_str = "
+        SELECT i.filename, COALESCE(a.name, '') as album_name 
+        FROM images i
+        LEFT JOIN image_albums ia ON i.id = ia.image_id
+        LEFT JOIN albums a ON ia.album_id = a.id
+        WHERE 1=1
+    ".to_string();
 
-    query_str.push_str(" WHERE 1=1");
+    // Append filters
+    if let Some(ref alb) = pagination.album {
+        if alb != "all" && !alb.is_empty() {
+            query_str.push_str(" AND a.name = ?");
+        } else if alb.is_empty() {
+            query_str.push_str(" AND ia.album_id IS NULL");
+        }
+    }
+    if pagination.search.is_some() { query_str.push_str(" AND i.filename LIKE ?"); }
+    if pagination.min_size.is_some() { query_str.push_str(" AND i.file_size >= ?"); }
+    if pagination.max_size.is_some() { query_str.push_str(" AND i.file_size <= ?"); }
 
-    if pagination.album.is_some() {
-        query_str.push_str(" AND a.name = ?");
-    }
-    if pagination.search.is_some() {
-        query_str.push_str(" AND i.filename LIKE ?");
-    }
-    if pagination.min_size.is_some() {
-        query_str.push_str(" AND i.file_size >= ?");
-    }
-    if pagination.max_size.is_some() {
-        query_str.push_str(" AND i.file_size <= ?");
-    }
-
-    // Sort order handling
     let sort_order = pagination.sort.as_deref().unwrap_or("recent");
-    if sort_order == "oldest" {
-        query_str.push_str(" ORDER BY i.created_at ASC, i.id ASC");
-    } else {
-        query_str.push_str(" ORDER BY i.created_at DESC, i.id DESC");
-    }
+    if sort_order == "oldest" { query_str.push_str(" ORDER BY i.created_at ASC, i.id ASC"); }
+    else { query_str.push_str(" ORDER BY i.created_at DESC, i.id DESC"); }
     query_str.push_str(" LIMIT ? OFFSET ?;");
 
+    // Bind arguments
     let mut db_query = sqlx::query(&query_str);
-
-    // Bind parameters dynamically in chronological order of appearance
-    if let Some(ref alb) = pagination.album { db_query = db_query.bind(alb); }
+    if let Some(ref alb) = pagination.album {
+        if alb != "all" && !alb.is_empty() { db_query = db_query.bind(alb); }
+    }
     if let Some(ref s) = pagination.search { db_query = db_query.bind(format!("%{}%", s)); }
     if let Some(min) = pagination.min_size { db_query = db_query.bind(min); }
     if let Some(max) = pagination.max_size { db_query = db_query.bind(max); }
-    
     db_query = db_query.bind(limit).bind(offset);
 
     let rows = db_query.fetch_all(&state.db).await.unwrap();
-    let images: Vec<String> = rows.iter().map(|r| r.get::<String, _>("filename")).collect();
+    
+    // 🆕 Map rows into our new structural ImageItem format
+    let images: Vec<ImageItem> = rows.iter().map(|r| {
+        ImageItem {
+            filename: r.get::<String, _>("filename"),
+            album: r.get::<String, _>("album_name"),
+        }
+    }).collect();
 
-    // Check if there are more images available for pagination
-    let mut count_str = "SELECT COUNT(*) FROM images i".to_string();
-    if pagination.album.is_some() {
-        count_str.push_str(" JOIN image_albums ia ON i.id = ia.image_id JOIN albums a ON ia.album_id = a.id WHERE a.name = ?");
-    } else {
-        count_str.push_str(" WHERE 1=1");
+    // 2. Count query for pagination tracking
+    let mut count_str = "
+        SELECT COUNT(*) 
+        FROM images i
+        LEFT JOIN image_albums ia ON i.id = ia.image_id
+        LEFT JOIN albums a ON ia.album_id = a.id
+        WHERE 1=1
+    ".to_string();
+
+    if let Some(ref alb) = pagination.album {
+        if alb != "all" && !alb.is_empty() { count_str.push_str(" AND a.name = ?"); }
+        else if alb.is_empty() { count_str.push_str(" AND ia.album_id IS NULL"); }
     }
-    
+    if pagination.search.is_some() { count_str.push_str(" AND i.filename LIKE ?"); }
+    if pagination.min_size.is_some() { count_str.push_str(" AND i.file_size >= ?"); }
+    if pagination.max_size.is_some() { count_str.push_str(" AND i.file_size <= ?"); }
+
     let mut count_query = sqlx::query(&count_str);
-    if let Some(ref alb) = pagination.album { count_query = count_query.bind(alb); }
-    let total_count: i64 = count_query.fetch_one(&state.db).await.unwrap().get(0);
+    if let Some(ref alb) = pagination.album {
+        if alb != "all" && !alb.is_empty() { count_query = count_query.bind(alb); }
+    }
+    if let Some(ref s) = pagination.search { count_query = count_query.bind(format!("%{}%", s)); }
+    if let Some(min) = pagination.min_size { count_query = count_query.bind(min); }
+    if let Some(max) = pagination.max_size { count_query = count_query.bind(max); }
     
-    // 🔍 FIXED: Changed .length() to .len() here
+    let total_count: i64 = count_query.fetch_one(&state.db).await.unwrap().get(0);
     let has_more = (offset + images.len() as i64) < total_count;
 
     Json(ImageList { images, has_more }).into_response()
 }
-
-
-
-
-
-
 
 
 
@@ -483,32 +363,23 @@ async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl
 
 async fn handle_socket(mut socket: WebSocket, state: AppState) {
     let mut rx = state.tx.subscribe();
-
     while let Ok(upload_info) = rx.recv().await {
         let json_msg = serde_json::to_string(&upload_info).unwrap_or_default();
-        if socket.send(axum::extract::ws::Message::Text(json_msg.into())).await.is_err() {
-            break;
-        }
+        if socket.send(axum::extract::ws::Message::Text(json_msg.into())).await.is_err() { break; }
     }
 }
 
-async fn get_thumbnail(
-    State(state): State<AppState>,
-    Path(filename): Path<String>
-) -> impl IntoResponse {
-    let thumb_path = PathBuf::from(&state.thumbnails_dir).join(&filename);
 
+// ⚙️ UPDATED HANDLER: Calls our auto-orienting helper function safely
+async fn get_thumbnail(State(state): State<AppState>, Path(filename): Path<String>) -> impl IntoResponse {
+    let thumb_path = PathBuf::from(&state.thumbnails_dir).join(&filename);
     if thumb_path.exists() {
-        if let Ok(bytes) = fs::read(&thumb_path) {
-            return ([(header::CONTENT_TYPE, "image/webp")], bytes).into_response();
+        if let Ok(bytes) = fs::read(&thumb_path) { 
+            return ([(header::CONTENT_TYPE, "image/jpeg")], bytes).into_response(); 
         }
     }
 
-    let base_stem = match filename.rfind('.') {
-        Some(pos) => &filename[..pos],
-        None => &filename,
-    };
-
+    let base_stem = filename.rfind('.').map(|p| &filename[..p]).unwrap_or(&filename);
     let search_pattern = format!("{}.%", base_stem);
     let fallback_row = sqlx::query("SELECT filename FROM images WHERE filename LIKE ? LIMIT 1")
         .bind(&search_pattern)
@@ -521,122 +392,89 @@ async fn get_thumbnail(
     };
 
     let image_path = PathBuf::from(&state.images_dir).join(&original_filename);
-
-    if !image_path.exists() {
-        eprintln!("THUMBNAIL ERROR: Original source file not found at {:?}", image_path);
-        return (StatusCode::NOT_FOUND, "Original image source file not found").into_response();
-    }
+    if !image_path.exists() { return (StatusCode::NOT_FOUND, "Not Found").into_response(); }
 
     let t_path = thumb_path.clone();
     let i_path = image_path.clone();
 
-    println!("⚡ Compressing brand new thumbnail for: {}", original_filename);
-
+    // Spawn the task using our new orientation-aware function
     let res = tokio::task::spawn_blocking(move || {
-        match image::open(&i_path) {
-            Ok(raw_img) => {
-                let oriented_img = auto_orient_image(&i_path, raw_img);
-                let thumbnail = oriented_img.thumbnail(200, 200);
-                thumbnail.save_with_format(&t_path, image::ImageFormat::WebP)
-                    .map_err(|e| format!("{}", e))
-            }
-            Err(e) => Err(format!("{}", e))
-        }
+        generate_oriented_thumbnail(&i_path, &t_path)
     }).await;
 
-    if res.is_err() || res.unwrap().is_err() {
-        return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to process image compression").into_response();
+    if res.is_ok() && res.unwrap() {
+        if let Ok(bytes) = fs::read(&thumb_path) { 
+            return ([(header::CONTENT_TYPE, "image/jpeg")], bytes).into_response(); 
+        }
     }
-
-    let _ = sqlx::query("UPDATE images SET thumbnail_filename = ? WHERE filename = ?")
-        .bind(&filename)
-        .bind(&original_filename)
-        .execute(&state.db)
-        .await;
-
-    match fs::read(&thumb_path) {
-        Ok(bytes) => ([(header::CONTENT_TYPE, "image/webp")], bytes).into_response(),
-        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Failed to read generated thumbnail").into_response(),
-    }
+    StatusCode::INTERNAL_SERVER_ERROR.into_response()
 }
 
-fn auto_orient_image(image_path: &std::path::Path, mut img: image::DynamicImage) -> image::DynamicImage {
-    let file = match std::fs::File::open(image_path) {
-        Ok(f) => f,
-        Err(_) => return img,
+
+
+
+async fn delete_image(State(state): State<AppState>, Json(req): Json<DeleteRequest>) -> impl IntoResponse {
+    if req.password.as_deref() != Some(&state.master_password) { return (StatusCode::UNAUTHORIZED).into_response(); }
+    let _ = sqlx::query("DELETE FROM images WHERE filename = ?;").bind(&req.filename).execute(&state.db).await;
+    let _ = fs::remove_file(PathBuf::from(&state.images_dir).join(&req.filename));
+    if let Some(p) = req.filename.rfind('.') {
+        let _ = fs::remove_file(PathBuf::from(&state.thumbnails_dir).join(format!("{}.jpg", &req.filename[..p])));
+    }
+    StatusCode::OK.into_response()
+}
+
+async fn get_albums_list(State(state): State<AppState>) -> impl IntoResponse {
+    if let Ok(items) = sqlx::query("SELECT name FROM albums ORDER BY name ASC;").fetch_all(&state.db).await {
+        let albums: Vec<String> = items.iter().map(|r| r.get::<String, _>("name")).collect();
+        return Json(AlbumListResponse { albums }).into_response();
+    }
+    StatusCode::INTERNAL_SERVER_ERROR.into_response()
+}
+
+
+// 🛠️ FIX: Correct matching on TagValue variants for the rexif crate
+fn generate_oriented_thumbnail(img_path: &std::path::Path, thumb_path: &std::path::Path) -> bool {
+    let mut raw_img = match image::open(img_path) {
+        Ok(img) => img,
+        Err(_) => return false,
     };
 
-    let mut bufreader = std::io::BufReader::new(file);
-    let exifreader = exif::Reader::new();
+    // Attempt to read EXIF data to check for orientation tags
+    if let Ok(metadata) = rexif::parse_file(img_path) {
+        for entry in metadata.entries {
+            if entry.tag == rexif::ExifTag::Orientation {
+                let mut orientation_value = 1;
 
-    if let Ok(exif) = exifreader.read_from_container(&mut bufreader) {
-        if let Some(field) = exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY) {
-            if let Some(orientation_value) = field.value.get_uint(0) {
-                img = match orientation_value {
-                    3 => img.rotate180(),
-                    6 => img.rotate90(),
-                    8 => img.rotate270(),
-                    _ => img,
+                // Match directly against rexif's actual TagValue variants
+                match &entry.value {
+                    rexif::TagValue::U16(vec) => {
+                        if let Some(&val) = vec.first() { orientation_value = val; }
+                    }
+                    rexif::TagValue::U32(vec) => {
+                        if let Some(&val) = vec.first() { orientation_value = val as u16; }
+                    }
+                    rexif::TagValue::I16(vec) => {
+                        if let Some(&val) = vec.first() { orientation_value = val as u16; }
+                    }
+                    rexif::TagValue::I32(vec) => {
+                        if let Some(&val) = vec.first() { orientation_value = val as u16; }
+                    }
+                    _ => {} // Fallback for unmatched types
+                }
+
+                // Rotate the image buffer based on standard EXIF Orientation definitions
+                raw_img = match orientation_value {
+                    3 => raw_img.rotate180(),
+                    6 => raw_img.rotate90(),
+                    8 => raw_img.rotate270(),
+                    _ => raw_img, // 1 is normal layout orientation
                 };
+                break;
             }
         }
     }
-    img
+
+    // Generate a clean 300x300 thumbnail with corrected rotation
+    let thumbnail = raw_img.thumbnail(300, 300);
+    thumbnail.save_with_format(thumb_path, image::ImageFormat::Jpeg).is_ok()
 }
-
-async fn delete_image(
-    State(state): State<AppState>,
-    Json(req): Json<DeleteRequest>,
-) -> impl IntoResponse {
-    if req.password.as_deref() != Some(&state.master_password) {
-        return (StatusCode::UNAUTHORIZED, "Incorrect master password").into_response();
-    }
-
-    let filename = &req.filename;
-
-    let db_result = sqlx::query("DELETE FROM images WHERE filename = ?")
-        .bind(filename)
-        .execute(&state.db)
-        .await;
-
-    if let Err(e) = db_result {
-        println!("Database deletion error: {}", e);
-        return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to delete from database").into_response();
-    }
-
-    let image_path = PathBuf::from(&state.images_dir).join(filename);
-    if let Err(e) = fs::remove_file(&image_path) {
-        println!("Warning: Could not delete raw image file {:?}: {}", image_path, e);
-    }
-
-    if let Some(dot_pos) = filename.rfind('.') {
-        let base_name = &filename[..dot_pos];
-        let thumb_path = PathBuf::from(&state.thumbnails_dir).join(format!("{}.webp", base_name));
-
-        if let Err(e) = fs::remove_file(&thumb_path) {
-            println!("Warning: Could not delete thumbnail file {:?}: {}", thumb_path, e);
-        }
-    }
-
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({ "status": "success", "filename": filename }))
-    ).into_response()
-}
-
-
-// 🆕 Fetch the clean list of all categories currently in use
-async fn get_albums_list(State(state): State<AppState>) -> impl IntoResponse {
-    let rows = sqlx::query("SELECT name FROM albums ORDER BY name ASC;")
-        .fetch_all(&state.db)
-        .await;
-
-    match rows {
-        Ok(items) => {
-            let albums: Vec<String> = items.iter().map(|r| r.get::<String, _>("name")).collect();
-            Json(AlbumListResponse { albums }).into_response()
-        }
-        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Failed to read categories").into_response(),
-    }
-}
-
