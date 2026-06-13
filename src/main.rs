@@ -60,10 +60,18 @@ struct ImageList {
 }
 
 // Extra fields matching live stream sync pipelines
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 struct UploadResponse {
+    // 🎯 Use a Serde fallback default so if "action" is missing, it automatically becomes "upload"
+    #[serde(default = "default_action")]
+    action: String,
     filename: String,
     album: String,
+}
+
+// ⚙️ Helper helper function to supply the fallback string literal value
+fn default_action() -> String {
+    "upload".to_string()
 }
 
 #[derive(Clone)]
@@ -77,6 +85,7 @@ struct AppState {
 
 #[tokio::main]
 async fn main() {
+  
     dotenvy::dotenv().ok();
 
     let port: u16 = std::env::var("PORT")
@@ -97,6 +106,122 @@ async fn main() {
             std::env::var("THUMBNAILS_DIR").unwrap_or_else(|_| "./thumb".to_string())
         )
     };
+
+    // 🎯 FIX: Instead of hardcoding "sqlite://gallery.db", dynamically pick the path based on environment
+    let db_url = if is_termux {
+        "sqlite:///data/data/com.termux/files/home/gallery.db".to_string()
+    } else {
+        std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite://gallery.db".to_string())
+    };
+
+    // 🛠️ SAFETY CHECK: Strip the protocol and touch the file if it's completely missing
+    if let Some(clean_path) = db_url.strip_prefix("sqlite://") {
+        let db_path = std::path::Path::new(clean_path);
+        if !db_path.exists() {
+            println!("Database file missing. Provisioning fresh instance at: {:?}", db_path);
+            if let Some(parent) = db_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::File::create(db_path);
+        }
+    }
+
+    println!("Connecting to database string: {}", db_url);
+
+    // 🚀 Now connect using our dynamic db_url variable instead of the hardcoded literal
+    let db = SqlitePool::connect(&db_url)
+        .await
+        .expect("Failed to connect to SQLite");
+
+    // 🎯 AUTO-INITIALIZATION: Recreate tables if they don't exist
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS images (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            filename TEXT NOT NULL UNIQUE,
+            file_size INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL
+        );"
+    )
+    .execute(&db)
+    .await
+    .expect("Failed to initialize images table layout");
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS albums (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE
+        );"
+    )
+    .execute(&db)
+    .await
+    .expect("Failed to initialize albums table layout");
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS image_albums (
+            image_id INTEGER NOT NULL,
+            album_id INTEGER NOT NULL,
+            PRIMARY KEY (image_id, album_id),
+            FOREIGN KEY (image_id) REFERENCES images(id) ON DELETE CASCADE,
+            FOREIGN KEY (album_id) REFERENCES albums(id) ON DELETE CASCADE
+        );"
+    )
+    .execute(&db)
+    .await
+    .expect("Failed to initialize image_albums structural mapping table");
+
+
+
+  
+    // --- 📂 STARTUP STORAGE SYNCHRONIZATION LOOP ---
+    println!("Scanning image directory for untracked filesystem assets...");
+    if let Ok(entries) = fs::read_dir(&images_dir) { // 🎯 Fixed variable name to match your code
+        for entry in entries.flatten() {
+            let path = entry.path();
+            
+            if path.is_file() {
+                if let Some(filename_os) = path.file_name() {
+                    let filename = filename_os.to_string_lossy().into_owned();
+                    
+                    if filename.starts_with('.') { continue; }
+
+                    // 1. Verify if this file already exists in our database registry
+                    let exists_row = sqlx::query("SELECT 1 FROM images WHERE filename = ? LIMIT 1;")
+                        .bind(&filename)
+                        .fetch_optional(&db)
+                        .await;
+
+                    if let Ok(None) = exists_row {
+                        println!("Found untracked file: {}. Cataloging to database...", filename);
+                        
+                        // 2. Read physical metadata sizes safely
+                        let file_size = fs::metadata(&path).map(|m| m.len() as i64).unwrap_or(0);
+                        
+                        // 3. Fallback timestamp sequence tracking
+                        let created_at = fs::metadata(&path)
+                            .and_then(|m| m.created())
+                            .map(|t| t.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64)
+                            .unwrap_or_else(|_| {
+                                SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64
+                            });
+
+                        // 4. Register the asset row into the database layout
+                        let _ = sqlx::query(
+                            "INSERT INTO images (filename, created_at, file_size) VALUES (?, ?, ?);"
+                        )
+                        .bind(&filename)
+                        .bind(created_at)
+                        .bind(file_size)
+                        .execute(&db)
+                        .await;
+                    }
+                }
+            }
+        }
+    }
+    println!("Filesystem sync check complete!");
+
+
+    
 
     let db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite://gallery.db".to_string());
 
@@ -193,14 +318,22 @@ async fn upload_image(
     let file_size = file_data.len() as i64;
     let clean_album = album_tag.unwrap_or_default();
 
-    let insert_res = sqlx::query(
-        "INSERT INTO images (filename, created_at, file_size) VALUES (?, ?, ?);"
-    )
-    .bind(&unique_filename)
-    .bind(timestamp as i64)
-    .bind(file_size)
-    .execute(&state.db)
-    .await;
+ // ⏱️ Get the absolute current Unix timestamp in seconds
+let timestamp = SystemTime::now()
+    .duration_since(UNIX_EPOCH)
+    .unwrap()
+    .as_secs() as i64;
+    
+            // 🎯 Your exact insert block:
+        let insert_res = sqlx::query(
+            "INSERT INTO images (filename, created_at, file_size) VALUES (?, ?, ?);"
+        )
+        .bind(&unique_filename)
+        .bind(timestamp) // Pass the dynamic timestamp variable here
+        .bind(file_size as i64) // Cast to i64 to ensure type safety with SQLite
+        .execute(&state.db)
+        .await;
+
 
     if let Ok(result) = insert_res {
         let image_id = result.last_insert_rowid();
@@ -212,7 +345,12 @@ async fn upload_image(
             }
         }
         
-        let response_payload = UploadResponse { filename: unique_filename, album: clean_album };
+       
+        let response_payload = UploadResponse { 
+    action: "upload".to_string(), // 🎯 Add this line
+    filename: unique_filename, 
+    album: clean_album 
+};
         let _ = state.tx.send(response_payload.clone());
         return Json(response_payload).into_response();
     }
@@ -251,6 +389,7 @@ async fn assign_album_to_existing_image(
 
         // 🆕 BROADCAST THE UPDATE: Notify all open browsers about the new album alignment!
         let response_payload = UploadResponse { 
+            action: "upload".to_string(),
             filename: req.filename.clone(), 
             album: req.album.clone() 
         };
@@ -413,15 +552,61 @@ async fn get_thumbnail(State(state): State<AppState>, Path(filename): Path<Strin
 
 
 
-async fn delete_image(State(state): State<AppState>, Json(req): Json<DeleteRequest>) -> impl IntoResponse {
-    if req.password.as_deref() != Some(&state.master_password) { return (StatusCode::UNAUTHORIZED).into_response(); }
-    let _ = sqlx::query("DELETE FROM images WHERE filename = ?;").bind(&req.filename).execute(&state.db).await;
-    let _ = fs::remove_file(PathBuf::from(&state.images_dir).join(&req.filename));
-    if let Some(p) = req.filename.rfind('.') {
-        let _ = fs::remove_file(PathBuf::from(&state.thumbnails_dir).join(format!("{}.jpg", &req.filename[..p])));
+// async fn delete_image(State(state): State<AppState>, Json(req): Json<DeleteRequest>) -> impl IntoResponse {
+//     if req.password.as_deref() != Some(&state.master_password) { return (StatusCode::UNAUTHORIZED).into_response(); }
+//     let _ = sqlx::query("DELETE FROM images WHERE filename = ?;").bind(&req.filename).execute(&state.db).await;
+//     let _ = fs::remove_file(PathBuf::from(&state.images_dir).join(&req.filename));
+//     if let Some(p) = req.filename.rfind('.') {
+//         let _ = fs::remove_file(PathBuf::from(&state.thumbnails_dir).join(format!("{}.jpg", &req.filename[..p])));
+//     }
+//     StatusCode::OK.into_response()
+// }
+
+
+async fn delete_image(
+    State(state): State<AppState>, 
+    Json(req): Json<DeleteRequest>
+) -> impl IntoResponse {
+    // 1. Authenticate using your master password check
+    if req.password.as_deref() != Some(&state.master_password) { 
+        return (StatusCode::UNAUTHORIZED).into_response(); 
     }
+
+    // 🎯 Clone the filename now so we have a clean copy for the WebSocket broadcast later
+    let filename_for_ws = req.filename.clone();
+
+    // 2. Remove the row from the SQLite database registry
+    let _ = sqlx::query("DELETE FROM images WHERE filename = ?;")
+        .bind(&req.filename)
+        .execute(&state.db)
+        .await;
+
+    // 3. Delete the original full-size image from disk safely
+    let _ = fs::remove_file(PathBuf::from(&state.images_dir).join(&req.filename));
+
+    // 4. Delete the companion thumbnail from disk cleanly (converting the extension to .jpg)
+    if let Some(p) = req.filename.rfind('.') {
+        let _ = fs::remove_file(
+            PathBuf::from(&state.thumbnails_dir).join(format!("{}.jpg", &req.filename[..p]))
+        );
+    }
+
+    // 🎯 5. BROADCAST: Send the live deletion event signal to all active WebSocket users!
+    let delete_payload = UploadResponse {
+        action: "delete".to_string(),
+        filename: filename_for_ws,
+        album: "".to_string(), // Empty string placeholder since it's going away
+    };
+    let _ = state.tx.send(delete_payload);
+
     StatusCode::OK.into_response()
 }
+
+
+
+
+
+
 
 async fn get_albums_list(State(state): State<AppState>) -> impl IntoResponse {
     if let Ok(items) = sqlx::query("SELECT name FROM albums ORDER BY name ASC;").fetch_all(&state.db).await {

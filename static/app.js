@@ -434,7 +434,6 @@ async function loadAlbumDropdownOptions() {
 
 // --- WebSocket Live Stream Sync Handling ---
 // 🔄 Keep this sync function clean and lightweight inside static/app.js
-
 function setupWebSocket() {
     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const socket = new WebSocket(`${wsProtocol}//${window.location.host}/api/ws`);
@@ -442,6 +441,30 @@ function setupWebSocket() {
     socket.onmessage = (event) => {
         try {
             const data = JSON.parse(event.data);
+
+            // 🎯 1. LIVE DELETION CHECK
+            if (data.action === 'delete') {
+                const targetFilename = data.filename;
+                
+                // Remove from our main image listing cache array
+                const imageIndex = allImages.indexOf(targetFilename);
+                if (imageIndex > -1) {
+                    allImages.splice(imageIndex, 1);
+                    if (offset > 0) offset -= 1;
+                }
+
+                // Remove from the album tracking memory map
+                delete imageAlbumMap[targetFilename];
+
+                // Re-render the gallery layout so the deleted card vanishes smoothly
+                renderGalleryHTML();
+                
+                // Refresh the album dropdown lists in case it was the last file in that album
+                loadAlbumDropdownOptions();
+                return; // Stop processing further for a deletion
+            }
+
+            // --- 📥 2. YOUR EXISTING UPLOAD / MOVE LOGIC ---
             const incomingFile = data.filename;
             const incomingAlbum = data.album || ""; 
             const originalNameFromWebsocket = incomingFile.replace(/^\d+_/, '');
@@ -455,7 +478,7 @@ function setupWebSocket() {
             const activeAlbumFilter = document.getElementById('album-select').value;
             const imageIndex = allImages.indexOf(incomingFile);
 
-            // 🎯 FILTER MATCH: Does this item belong in our current layout filter?
+            // FILTER MATCH: Does this item belong in our current layout filter?
             const matchesFilter = (
                 activeAlbumFilter === 'all' || 
                 (activeAlbumFilter === '' && incomingAlbum === '') || 
@@ -489,6 +512,8 @@ function setupWebSocket() {
     
     socket.onclose = () => { setTimeout(setupWebSocket, 3000); };
 }
+
+
 
 
 // --- Image Carousel Lightbox Functions ---
