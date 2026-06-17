@@ -269,6 +269,8 @@ async fn main() {
         .route("/thumb/:filename", get(get_thumbnail))
         .route("/api/delete", post(delete_image))
         .nest_service("/images", ServeDir::new(&state.images_dir))
+       
+      .route("/:album_name", get(vanity_album_index))
         .with_state(state)
         .layer(ServiceBuilder::new().layer(DefaultBodyLimit::max(50 * 1024 * 1024)));
 
@@ -662,4 +664,9 @@ fn generate_oriented_thumbnail(img_path: &std::path::Path, thumb_path: &std::pat
     // Generate a clean 300x300 thumbnail with corrected rotation
     let thumbnail = raw_img.thumbnail(300, 300);
     thumbnail.save_with_format(thumb_path, image::ImageFormat::Jpeg).is_ok()
+}
+
+async fn vanity_album_index(axum::extract::Path(_album_name): axum::extract::Path<String>) -> impl axum::response::IntoResponse {
+    let index_html_content = include_str!("../static/index.html");
+    axum::response::Html(index_html_content)
 }

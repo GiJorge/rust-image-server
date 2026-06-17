@@ -598,6 +598,58 @@ function forgetPassword() {
     alert("Session cleared.");
 }
 
-loadAlbumDropdownOptions();
-setupWebSocket();
-loadImages();
+//loadAlbumDropdownOptions();
+//setupWebSocket();
+//loadImages();
+
+
+async function bootAppWithVanityRouting() {
+    // 1. Rebuild the options list from the backend database categories
+    await loadAlbumDropdownOptions();
+    
+    // 2. Extract the address URL path parameter
+    const pathParts = window.location.pathname.split('/');
+    const urlAlbum = pathParts[1] && pathParts[1] !== "" ? decodeURIComponent(pathParts[1]) : "all";
+
+    // Ensure we are looking at a real album name, not a system resource asset
+    if (urlAlbum !== "all" && urlAlbum !== "static" && urlAlbum !== "api" && urlAlbum !== "images" && urlAlbum !== "thumb") {
+        const albumSelect = document.getElementById('album-select');
+        if (albumSelect) {
+            
+            // 🎯 CASE-INSENSITIVE CHECK: 
+            // Turn everything lowercase to find a match, regardless of how the user typed it
+            const targetLower = urlAlbum.toLowerCase();
+            let matchedOptionValue = null;
+
+            for (let i = 0; i < albumSelect.options.length; i++) {
+                if (albumSelect.options[i].value.toLowerCase() === targetLower) {
+                    // Found a match! Capture the exact case string expected by your Rust backend database
+                    matchedOptionValue = albumSelect.options[i].value;
+                    break;
+                }
+            }
+
+            // If the matching folder exists in your dropdown, use its exact database string casing style
+            if (matchedOptionValue !== null) {
+                albumSelect.value = matchedOptionValue;
+            } else {
+                // If it's a completely fresh shared album link space with no files yet,
+                // fall back to using the exact string provided in the URL path address text
+                const opt = document.createElement('option');
+                opt.value = urlAlbum;
+                opt.innerText = `📂 ${urlAlbum}`;
+                albumSelect.appendChild(opt);
+                albumSelect.value = urlAlbum;
+            }
+        }
+    }
+    
+    // 3. Fetch data array grids from backend API routes
+    await loadImages();
+    
+    // 4. Fire up your persistent WebSocket listener
+    setupWebSocket();
+}
+
+// Execute the final synchronized startup routine!
+bootAppWithVanityRouting();
