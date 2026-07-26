@@ -22,37 +22,18 @@
         <div id="upload-status">Uploading...</div>
     </div>
 
-    
     <div id="auth-modal" class="modal-overlay">
-    <div class="modal-box">
-        <h3>🔒 Admin Authentication</h3>
-        <p>Please enter your master password to execute this action:</p>
-      
-        <form onsubmit="handleAuthFormSubmit(event)">
-            <!-- 💡 Hidden username field to satisfy accessibility and password managers -->
-            <input 
-                type="text" 
-                name="username" 
-                value="admin" 
-                autocomplete="username" 
-                aria-label="Username" 
-                style="display: none;"
-            >
-
-            <input 
-                type="password" 
-                id="auth-password-field" 
-                placeholder="Enter Password..."
-                autocomplete="current-password"
-            >
+        <div class="modal-box">
+            <h3>🔒 Admin Authentication</h3>
+            <p>Please enter your master password to execute this action:</p>
           
+            <input type="password" id="auth-password-field" placeholder="Enter Password..." onkeydown="if(event.key==='Enter') submitAuthModal()">
             <div class="modal-buttons">
-                <button type="submit" class="btn-action btn-action-submit">Confirm</button>
-                <button type="button" class="btn-action btn-action-cancel" onclick="closeAuthModal()">Cancel</button>
+                <button class="btn-action btn-action-submit" onclick="submitAuthModal()">Confirm</button>
+                <button class="btn-action btn-action-cancel" onclick="closeAuthModal()">Cancel</button>
             </div>
-        </form>
+        </div>
     </div>
-</div>
 
     <div id="confirm-modal" class="modal-overlay">
         <div class="modal-box">

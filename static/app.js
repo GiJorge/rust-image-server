@@ -181,14 +181,6 @@ function submitAuthModal() {
     if (actionToRun) actionToRun(pwd);
 }
 
-function handleAuthFormSubmit(event) {
-    // 💡 Prevents browser from doing a standard HTML form page reload
-    event.preventDefault(); 
-    
-    // Executes your existing submission logic
-    submitAuthModal();
-}
-
 // --- Delete Modal Functions ---
 function triggerDeleteCheck(event) {
     if (event) event.stopPropagation();
