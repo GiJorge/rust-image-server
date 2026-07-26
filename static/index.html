@@ -5,6 +5,7 @@
     <title>Home Image Server</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Advent+Pro:ital,wght@0,100..900;1,100..900&family=Arima:wght@100..700&family=Croissant+One&family=Edu+AU+VIC+WA+NT+Guides&family=Kelly+Slab&family=Smooch+Sans:wght@100..900&family=Special+Elite&display=swap" rel="stylesheet">
     
@@ -21,17 +22,37 @@
         <div id="upload-status">Uploading...</div>
     </div>
 
+    
     <div id="auth-modal" class="modal-overlay">
-        <div class="modal-box">
-            <h3>🔒 Admin Authentication</h3>
-            <p>Please enter your master password to execute this action:</p>
-            <input type="password" id="auth-password-field" placeholder="Enter Password..." onkeydown="if(event.key==='Enter') submitAuthModal()">
+    <div class="modal-box">
+        <h3>🔒 Admin Authentication</h3>
+        <p>Please enter your master password to execute this action:</p>
+      
+        <form onsubmit="handleAuthFormSubmit(event)">
+            <!-- 💡 Hidden username field to satisfy accessibility and password managers -->
+            <input 
+                type="text" 
+                name="username" 
+                value="admin" 
+                autocomplete="username" 
+                aria-label="Username" 
+                style="display: none;"
+            >
+
+            <input 
+                type="password" 
+                id="auth-password-field" 
+                placeholder="Enter Password..."
+                autocomplete="current-password"
+            >
+          
             <div class="modal-buttons">
-                <button class="btn-action btn-action-submit" onclick="submitAuthModal()">Confirm</button>
-                <button class="btn-action btn-action-cancel" onclick="closeAuthModal()">Cancel</button>
+                <button type="submit" class="btn-action btn-action-submit">Confirm</button>
+                <button type="button" class="btn-action btn-action-cancel" onclick="closeAuthModal()">Cancel</button>
             </div>
-        </div>
+        </form>
     </div>
+</div>
 
     <div id="confirm-modal" class="modal-overlay">
         <div class="modal-box">
@@ -44,18 +65,22 @@
         </div>
     </div>
 
-    <div id="upload-album-modal" class="modal-overlay">
-        <div class="modal-box">
-            <h3>📂 Choose Upload Destination</h3>
-            <p>Select target destination storage album folder category:</p>
-            <select id="upload-select-existing" onchange="toggleNewAlbumInputField(this)"></select>
-            <input type="text" id="upload-new-album-input" placeholder="Type new album folder name..." style="display: none; margin-top: 10px; width: 100%; padding: 8px; box-sizing: border-box;">
-            <div class="modal-buttons">
-                <button class="btn-action btn-action-submit" onclick="submitUploadAlbumModal()">Continue</button>
-                <button class="btn-action btn-action-cancel" onclick="closeUploadAlbumModal()">Cancel</button>
-            </div>
+  <div id="upload-album-modal" class="modal-overlay">
+    <div class="modal-box">
+        <h3>📂 Choose Upload Destination</h3>
+        <p>Select target destination storage album folder category:</p>
+        <select id="upload-select-existing" onchange="toggleNewAlbumInputField(this)"></select>
+        <input type="text" id="upload-new-album-input" placeholder="Type new album folder name..." style="display: none; margin-top: 10px; width: 100%; padding: 8px; box-sizing: border-box;">
+        
+        <!-- 🆕 Hidden File Input configured with the 'multiple' attribute and image mime filter -->
+        <input type="file" id="file-upload-input" accept="image/*" multiple style="display: none;" onchange="handleUpload(this)">
+
+        <div class="modal-buttons">
+            <button class="btn-action btn-action-submit" onclick="submitUploadAlbumModal()">Continue</button>
+            <button class="btn-action btn-action-cancel" onclick="closeUploadAlbumModal()">Cancel</button>
         </div>
     </div>
+</div>
 
     <div id="assign-existing-album-modal" class="modal-overlay">
         <div class="modal-box">
@@ -93,6 +118,9 @@
 
     <div id="modal-container" onclick="closeModalTarget(event)">
         <span class="close-btn" onclick="closeModal()">&times;</span>
+        <!-- 🔢 Top Counter Badge -->
+  
+    <div id="lightbox-counter" class="lightbox-counter">1 </div>
         <button class="nav-btn prev-btn" onclick="prevImage(event)">&#10094;</button>
         <button class="nav-btn next-btn" onclick="nextImage(event)">&#10095;</button>
         
@@ -103,8 +131,23 @@
         </div>
 
         <div class="panzoom-wrapper">
-            <img id="modal-img" src="" alt="Full Screen Resolution Display View">
+            <!-- CSS Loading Spinner -->
+    <div id="lightbox-spinner" class="spinner hidden"></div>
+            <img id="modal-img" src="" alt="">
         </div>
     </div>
+
+
+
+    <!-- Floating Upload Progress Bar -->
+<div id="upload-progress-container" class="upload-progress-container">
+    <div class="upload-progress-header">
+        <span id="upload-progress-text">Uploading images...</span>
+        <span id="upload-progress-percent">0%</span>
+    </div>
+    <div class="upload-progress-bar-bg">
+        <div id="upload-progress-bar-fill" class="upload-progress-bar-fill"></div>
+    </div>
+</div>
 </body>
 </html>

@@ -9,18 +9,24 @@ document.documentElement.setAttribute('data-theme', savedTheme);
 
 // --- Core State Variables ---
 let allImages = [];
+let globalManifest = []; // Holds all image filenames from server
 let currentIndex = 0;
+let currentAbortController = null;
+let navDebounceTimer = null;
 let offset = 0;
 const limit = 30;
 let loading = false;
 let hasMore = true;
 let debounceTimer;
+let wsRenderTimeout;
+let albumRefreshTimer;
 const pendingUploads = new Set();
 
+
 // Side tracking object mapping image files to their albums
-let imageAlbumMap = {}; 
-let globalSelectedUploadAlbum = ""; 
-let globalAssignPasswordStorage = ""; 
+let imageAlbumMap = {};
+let globalSelectedUploadAlbum = "";
+let globalAssignPasswordStorage = "";
 let activeAuthCallback = null;
 
 const gallery = document.getElementById('gallery');
@@ -44,6 +50,109 @@ const observer = new IntersectionObserver((entries) => {
     });
 });
 
+
+// Fetch image list from Rust backend
+async function initManifest() {
+    try {
+        const response = await fetch('/api/images/manifest');
+        if (response.ok) {
+            globalManifest = await response.json();
+            console.log(`✅ Manifest loaded: ${globalManifest.length} images`);
+        } else {
+            console.error('❌ Manifest route error:', response.status);
+        }
+    } catch (err) {
+        console.error('❌ Failed to fetch manifest:', err);
+    }
+}
+
+// 2. Helper function to refresh counter text
+
+
+function updateCounterDisplay() {
+    const counterElem = document.getElementById('lightbox-counter');
+    if (!counterElem) return;
+
+    if (!allImages || allImages.length === 0) {
+        counterElem.textContent = "0 / 0";
+    } else {
+        // When allImages has 60 items, index 30 becomes: "31 / 60"
+        counterElem.textContent = `${currentIndex + 1} / ${allImages.length}`;
+    }
+}
+
+
+// 3. Call updateCounterDisplay inside loadLightboxImage
+function loadLightboxImage(index) {
+    const filename = globalManifest[index];
+    if (!filename) return;
+
+    // Update counter on top of screen
+    updateCounterDisplay();
+
+    const imgElement = document.getElementById('modal-img');
+    const spinner = document.getElementById('lightbox-spinner');
+
+    if (currentAbortController) currentAbortController.abort();
+    currentAbortController = new AbortController();
+
+    if (spinner) spinner.classList.remove('hidden');
+
+    const cleanStem = filename.includes('.') 
+        ? filename.substring(0, filename.lastIndexOf('.')) 
+        : filename;
+
+    const thumbUrl = `/thumb/${cleanStem}.jpg`;
+    const fullResUrl = `/images/${filename}`;
+
+    // Force memory release on Samsung A06
+    imgElement.src = '';
+    imgElement.src = thumbUrl;
+
+    const highResImg = new Image();
+    highResImg.src = fullResUrl;
+
+    const handleSuccess = () => {
+        if (currentIndex === index) {
+            imgElement.src = fullResUrl;
+            if (spinner) spinner.classList.add('hidden');
+        }
+    };
+
+    const handleError = () => {
+        if (currentIndex === index) {
+            if (spinner) spinner.classList.add('hidden');
+        }
+    };
+
+    if ('decode' in highResImg) {
+        highResImg.decode().then(handleSuccess).catch(handleError);
+    } else {
+        highResImg.onload = handleSuccess;
+        highResImg.onerror = handleError;
+    }
+}
+
+// Call on startup
+document.addEventListener('DOMContentLoaded', () => {
+    initManifest();
+});
+
+// --- Performance Helper Utilities ---
+function scheduleGalleryRender() {
+    clearTimeout(wsRenderTimeout);
+    wsRenderTimeout = setTimeout(() => {
+        renderGalleryHTML();
+    }, 50);
+}
+
+function debouncedLoadAlbumOptions() {
+    clearTimeout(albumRefreshTimer);
+    albumRefreshTimer = setTimeout(() => {
+        loadAlbumDropdownOptions();
+    }, 300);
+}
+
 function requestActionAuthorization(callbackAction) {
     const rememberedPassword = sessionStorage.getItem('gallery_session_pwd');
     if (rememberedPassword) {
@@ -64,12 +173,20 @@ function closeAuthModal() {
 function submitAuthModal() {
     const pwd = document.getElementById('auth-password-field').value;
     if (!pwd) return;
-    
+
     sessionStorage.setItem('gallery_session_pwd', pwd);
     const actionToRun = activeAuthCallback;
     closeAuthModal();
-    
+
     if (actionToRun) actionToRun(pwd);
+}
+
+function handleAuthFormSubmit(event) {
+    // 💡 Prevents browser from doing a standard HTML form page reload
+    event.preventDefault(); 
+    
+    // Executes your existing submission logic
+    submitAuthModal();
 }
 
 // --- Delete Modal Functions ---
@@ -92,18 +209,18 @@ function submitConfirmModal() {
 // --- Existing Images Album Assignment Functions ---
 function triggerExistingAlbumAssign(event) {
     if (event) event.stopPropagation();
-    
+
     requestActionAuthorization((password) => {
         globalAssignPasswordStorage = password;
-        
+
         const currentFilename = allImages[currentIndex];
         const currentAlbum = imageAlbumMap[currentFilename] || "";
 
         const mainSelector = document.getElementById('album-select');
         const assignSelector = document.getElementById('assign-select-existing');
-        
+
         assignSelector.innerHTML = '<option value="">📁 General Gallery / No Album</option><option value="__NEW_ALBUM__">➕ [Create New Album...]</option>';
-        
+
         Array.from(mainSelector.options).forEach(opt => {
             if (opt.value !== 'all' && opt.value !== '') {
                 const newOpt = document.createElement('option');
@@ -176,9 +293,9 @@ function triggerUploadCheck() {
     requestActionAuthorization(() => {
         const mainSelector = document.getElementById('album-select');
         const uploadSelector = document.getElementById('upload-select-existing');
-        
+
         uploadSelector.innerHTML = '<option value="">📁 General Gallery / No Album</option><option value="__NEW_ALBUM__">➕ [Create New Album / Category...]</option>';
-        
+
         Array.from(mainSelector.options).forEach(opt => {
             if (opt.value !== 'all' && opt.value !== '') {
                 const newOpt = document.createElement('option');
@@ -224,7 +341,13 @@ function submitUploadAlbumModal() {
     }
 
     closeUploadAlbumModal();
-    document.getElementById('file-input').click();
+
+    const fileInput = document.getElementById('file-input');
+    if (fileInput) {
+        fileInput.value = '';
+        fileInput.multiple = true;
+        fileInput.click();
+    }
 }
 
 function triggerFilterReset() {
@@ -238,7 +361,7 @@ function triggerFilterReset() {
     }, 300);
 }
 
-// --- Card Engine (Uses arrow events to eliminate quotes clashing) ---
+// --- Card Engine ---
 function createCardElement(name, imgIndex) {
     const card = document.createElement('div');
     card.className = 'card';
@@ -246,20 +369,17 @@ function createCardElement(name, imgIndex) {
 
     const cleanBase = name.includes('.') ? name.substring(0, name.lastIndexOf('.')) : name;
     const thumbFilename = cleanBase + '.jpg';
-    
-    // 🎯 Read the album string on the fly for this card
     const albumName = imageAlbumMap[name] || "";
-    
-    // Create the badge HTML element string if an album tag exists
-    const albumBadgeHtml = albumName 
-        ? `<div class="image-album-badge">📂 ${albumName}</div>` 
+
+    const albumBadgeHtml = albumName
+        ? `<div class="image-album-badge">📂 ${albumName}</div>`
         : '';
 
     card.innerHTML = `
         <div class="thumb-container">
             ${albumBadgeHtml}
-            <img src="" 
-                 data-src="/thumb/${thumbFilename}" 
+            <img src=""
+                 data-src="/thumb/${thumbFilename}"
                  alt="Gallery Preview Thumbnail"
                  style="width: 100%; height: 100%; object-fit: cover; display: block;"
                  onerror="this.onerror = null; if(this.src.endsWith('.jpg')) { this.src = '/thumb/${cleanBase}.webp'; }">
@@ -278,7 +398,7 @@ function renderGalleryHTML() {
     });
 }
 
-// --- Data Fetching and Persistence Operations ---
+// --- Data Fetching and Multi-Upload Handler ---
 
 async function loadImages() {
     if (loading || !hasMore) return;
@@ -292,7 +412,7 @@ async function loadImages() {
 
     let extraParams = '';
     if (albumValue !== 'all') extraParams += `&album=${encodeURIComponent(albumValue)}`;
-    
+
     if (sizeValue === 'small') {
         extraParams += '&max_size=1048576';
     } else if (sizeValue === 'medium') {
@@ -306,15 +426,12 @@ async function loadImages() {
         const response = await fetch(url);
         const data = await response.json();
 
-        // ⚙️ Process objects containing both filename and album data
         data.images.forEach((imgObj) => {
             const name = imgObj.filename;
             const albumName = imgObj.album;
 
             const imgIndex = allImages.length;
             allImages.push(name);
-            
-            // 🎯 Map the correct album from the database directly into the local state
             imageAlbumMap[name] = albumName;
 
             const card = createCardElement(name, imgIndex);
@@ -332,45 +449,84 @@ async function loadImages() {
     }
 }
 
+
+
+let totalBatchCount = 0;
+let processedBatchCount = 0;
+
 function handleUpload(input) {
     if (!input.files || input.files.length === 0) return;
     const password = sessionStorage.getItem('gallery_session_pwd');
-    const file = input.files[0];
-
-    // 🆕 Bring up the visual loading window spinner overlay instantly
-    document.getElementById('loading-overlay').style.display = 'flex';
-    document.getElementById('upload-status').innerText = "Processing image & generating thumbnail...";
+    const files = Array.from(input.files);
 
     const formData = new FormData();
-    formData.append('password', password);
-    formData.append('album', globalSelectedUploadAlbum); 
-    formData.append('image', file); 
+    formData.append('password', password || '');
+    formData.append('album', globalSelectedUploadAlbum || '');
 
-    pendingUploads.add(file.name);
+    files.forEach(file => {
+        formData.append('image', file);
+        pendingUploads.add(file.name);
+    });
 
-    fetch('/api/upload', { method: 'POST', body: formData })
-        .then(async (response) => {
-            // 🆕 Dismiss the upload loading animation mask instantly when complete
-            document.getElementById('loading-overlay').style.display = 'none';
+    // Setup global counters for real-time WebSocket tracking
+    totalBatchCount = files.length;
+    processedBatchCount = 0;
+
+    // --- UI Progress Bar References ---
+    const progressContainer = document.getElementById('upload-progress-container');
+    const progressText = document.getElementById('upload-progress-text');
+    const progressPercent = document.getElementById('upload-progress-percent');
+    const progressBarFill = document.getElementById('upload-progress-bar-fill');
+
+    // Display progress bar
+    progressText.innerText = `Uploading ${files.length} file(s)...`;
+    progressPercent.innerText = '0%';
+    progressBarFill.style.width = '0%';
+    progressContainer.style.display = 'block';
+    progressContainer.style.opacity = '1';
+
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/upload', true);
+
+    // Track initial Network Transfer Progress (0% to 50%)
+    xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable && totalBatchCount > 0) {
+            const uploadPercent = Math.round((event.loaded / event.total) * 50); // Scale up to 50%
+            progressBarFill.style.width = uploadPercent + '%';
+            progressPercent.innerText = uploadPercent + '%';
             
-            if (response.ok) {
-                pendingUploads.delete(file.name);
-                loadAlbumDropdownOptions();
-            } else if (response.status === 401) {
-                alert("Upload unauthorized. Resetting session credentials.");
-                sessionStorage.removeItem('gallery_session_pwd');
-            } else {
-                alert("Upload failed: " + await response.text());
+            if (uploadPercent >= 50) {
+                progressText.innerText = `Processing thumbnails (0/${totalBatchCount})...`;
             }
-        })
-        .catch((err) => {
-            // 🆕 Auto-dismiss on network disconnect dropouts
-            document.getElementById('loading-overlay').style.display = 'none';
-            console.error("Network infrastructure error during streaming:", err);
-        });
+        }
+    };
 
-    input.value = ''; 
+    xhr.onload = () => {
+        if (xhr.status === 200) {
+            files.forEach(file => pendingUploads.delete(file.name));
+            // Don't hide the progress bar yet! Let setupWebSocket complete the tracking.
+        } else if (xhr.status === 401) {
+            alert("Upload unauthorized. Resetting session credentials.");
+            sessionStorage.removeItem('gallery_session_pwd');
+            progressContainer.style.display = 'none';
+        } else {
+            alert("Upload failed: " + xhr.responseText);
+            progressContainer.style.display = 'none';
+        }
+    };
+
+    xhr.onerror = () => {
+        alert("Network transmission error occurred.");
+        progressContainer.style.display = 'none';
+    };
+
+    xhr.send(formData);
+    input.value = '';
 }
+
+
+
+
 
 async function executeDeletion(password) {
     const currentFilename = allImages[currentIndex];
@@ -400,6 +556,8 @@ async function executeDeletion(password) {
 }
 
 
+// 1. Global state for active album selection
+//let currentActiveAlbum = 'all';
 
 async function loadAlbumDropdownOptions() {
     try {
@@ -408,113 +566,196 @@ async function loadAlbumDropdownOptions() {
             const data = await response.json();
             const selector = document.getElementById('album-select');
             
-            // Remember what the user was looking at before updating options
-            const currentSelected = selector.value;
-            
+            // Save currently selected value before updating DOM options
+            const currentSelected = selector.value || 'all';
+
             selector.innerHTML = '<option value="all">📁 All Albums / General</option><option value="">📁 General Gallery / No Album</option>';
-            
+
             data.albums.forEach(albumName => {
-                if (albumName.trim() !== "") {
+                if (albumName && albumName.trim() !== "") {
                     const opt = document.createElement('option');
                     opt.value = albumName;
                     opt.innerText = `📂 ${albumName}`;
                     selector.appendChild(opt);
                 }
             });
-            
-            // Restore selection cleanly
+
+            // Restore selection
             selector.value = currentSelected;
+            currentActiveAlbum = selector.value;
+
+            // 💡 Ensure event listener is attached once to trigger filtering
+            if (!selector.dataset.listenerAttached) {
+                selector.addEventListener('change', onAlbumFilterChange);
+                selector.dataset.listenerAttached = "true";
+            }
         }
-    } catch (err) { 
-        console.error("Could not sync category select controls:", err); 
+    } catch (err) {
+        console.error("Could not sync category select controls:", err);
     }
 }
 
+// 2. Event handler when dropdown value changes
+async function onAlbumFilterChange(e) {
+    currentActiveAlbum = e.target.value;
+    console.log(`📁 Filtering gallery by album: "${currentActiveAlbum}"`);
 
+    // Reset pagination state
+    allImages = [];
+    currentIndex = 0;
 
-// --- WebSocket Live Stream Sync Handling ---
-// 🔄 Keep this sync function clean and lightweight inside static/app.js
+    // Clear grid UI container before loading filtered batch
+    const galleryGrid = document.getElementById('gallery-grid') || document.getElementById('images-container');
+    if (galleryGrid) galleryGrid.innerHTML = '';
+
+    // Fetch page 1 for the selected album
+    await fetchNextPageOfImages();
+}
+
+// 3. Updated fetch function that sends the album parameter to Axum
+async function fetchNextPageOfImages() {
+    const offset = allImages.length;
+    const limit = 30;
+
+    // Build URL with offset, limit, and active album filter
+    let url = `/api/images?offset=${offset}&limit=${limit}`;
+    
+    // Append album parameter if not default 'all'
+    if (currentActiveAlbum !== 'all') {
+        url += `&album=${encodeURIComponent(currentActiveAlbum)}`;
+    }
+
+    console.log(`📡 [PAGINATION] Requesting: ${url}`);
+    
+    try {
+        const response = await fetch(url);
+        if (!response.ok) return 0;
+
+        const data = await response.json(); // Returns { images: [...], has_more: boolean }
+        const newBatch = (data.images || []).map(item => item.filename);
+
+        if (newBatch.length === 0) {
+            console.log(`🏁 No more images found for album: "${currentActiveAlbum}".`);
+            return 0;
+        }
+
+        // Append only filtered album images to master list
+        allImages.push(...newBatch);
+
+        if (typeof renderGridCards === 'function') {
+            renderGridCards(data.images);
+        }
+
+        return newBatch.length;
+    } catch (err) {
+        console.error('❌ [PAGINATION] Fetch failed:', err);
+        return 0;
+    }
+}
+
+// --- Optimized WebSocket Live Stream Sync Handling ---
 function setupWebSocket() {
     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const socket = new WebSocket(`${wsProtocol}//${window.location.host}/api/ws`);
-    
-    socket.onmessage = (event) => {
-        try {
-            const data = JSON.parse(event.data);
 
-            // 🎯 1. LIVE DELETION CHECK
-            if (data.action === 'delete') {
-                const targetFilename = data.filename;
-                
-                // Remove from our main image listing cache array
-                const imageIndex = allImages.indexOf(targetFilename);
-                if (imageIndex > -1) {
-                    allImages.splice(imageIndex, 1);
-                    if (offset > 0) offset -= 1;
-                }
+   // Inside setupWebSocket():
+socket.onmessage = (event) => {
+    try {
+        const data = JSON.parse(event.data);
 
-                // Remove from the album tracking memory map
-                delete imageAlbumMap[targetFilename];
+        // --- Handle Upload Progress Updates via WebSockets ---
+        if (data.action === 'upload' && totalBatchCount > 0) {
+            processedBatchCount += 1;
 
-                // Re-render the gallery layout so the deleted card vanishes smoothly
-                renderGalleryHTML();
-                
-                // Refresh the album dropdown lists in case it was the last file in that album
-                loadAlbumDropdownOptions();
-                return; // Stop processing further for a deletion
+            const progressContainer = document.getElementById('upload-progress-container');
+            const progressText = document.getElementById('upload-progress-text');
+            const progressPercent = document.getElementById('upload-progress-percent');
+            const progressBarFill = document.getElementById('upload-progress-bar-fill');
+
+            // Calculate overall completion (50% transfer + 50% server processing)
+            const overallPercent = 50 + Math.round((processedBatchCount / totalBatchCount) * 50);
+            
+            progressBarFill.style.width = overallPercent + '%';
+            progressPercent.innerText = overallPercent + '%';
+            progressText.innerText = `Processing thumbnails (${processedBatchCount}/${totalBatchCount})...`;
+
+            // When all thumbnails in batch finish processing
+            if (processedBatchCount >= totalBatchCount) {
+                progressText.innerText = 'All photos processed!';
+                progressBarFill.style.width = '100%';
+                progressPercent.innerText = '100%';
+
+                // Reset counters
+                totalBatchCount = 0;
+                processedBatchCount = 0;
+
+                // Hide progress bar smoothly
+                setTimeout(() => {
+                    progressContainer.style.opacity = '0';
+                    setTimeout(() => { progressContainer.style.display = 'none'; }, 300);
+                }, 2000);
             }
-
-            // --- 📥 2. YOUR EXISTING UPLOAD / MOVE LOGIC ---
-            const incomingFile = data.filename;
-            const incomingAlbum = data.album || ""; 
-            const originalNameFromWebsocket = incomingFile.replace(/^\d+_/, '');
-            
-            // Clear pending tracking flags
-            pendingUploads.delete(originalNameFromWebsocket);
-
-            // Save the album tracking state globally in frontend memory
-            imageAlbumMap[incomingFile] = incomingAlbum;
-            
-            const activeAlbumFilter = document.getElementById('album-select').value;
-            const imageIndex = allImages.indexOf(incomingFile);
-
-            // FILTER MATCH: Does this item belong in our current layout filter?
-            const matchesFilter = (
-                activeAlbumFilter === 'all' || 
-                (activeAlbumFilter === '' && incomingAlbum === '') || 
-                (activeAlbumFilter === incomingAlbum)
-            );
-
-            if (imageIndex > -1) {
-                // The image is already on our screen! Let's verify it still belongs here.
-                if (!matchesFilter) {
-                    // It was moved to an album we aren't viewing right now, remove it dynamically.
-                    allImages.splice(imageIndex, 1);
-                    if (offset > 0) offset -= 1;
-                    renderGalleryHTML();
-                }
-            } else {
-                // This is a brand new upload item coming in
-                if (matchesFilter) {
-                    allImages.unshift(incomingFile);
-                    offset += 1;
-                    renderGalleryHTML();
-                }
-            }
-            
-            // Refresh our drop-down list variables so new album tags show up instantly!
-            loadAlbumDropdownOptions();
-
-        } catch (err) { 
-            console.error("Real-time pipeline refresh error:", err); 
         }
-    };
-    
+
+        // Rest of your existing websocket logic...
+        if (data.action === 'delete') {
+            const targetFilename = data.filename;
+            const imageIndex = allImages.indexOf(targetFilename);
+            if (imageIndex > -1) {
+                allImages.splice(imageIndex, 1);
+                if (offset > 0) offset -= 1;
+            }
+            delete imageAlbumMap[targetFilename];
+            scheduleGalleryRender();
+            debouncedLoadAlbumOptions();
+            return;
+        }
+
+        const incomingFile = data.filename;
+        const incomingAlbum = data.album || "";
+        const originalNameFromWebsocket = incomingFile.replace(/^\d+_/, '');
+
+        pendingUploads.delete(originalNameFromWebsocket);
+        imageAlbumMap[incomingFile] = incomingAlbum;
+
+        const activeAlbumFilter = document.getElementById('album-select').value;
+        const imageIndex = allImages.indexOf(incomingFile);
+
+        const matchesFilter = (
+            activeAlbumFilter === 'all' ||
+            (activeAlbumFilter === '' && incomingAlbum === '') ||
+            (activeAlbumFilter === incomingAlbum)
+        );
+
+        if (imageIndex > -1) {
+            if (!matchesFilter) {
+                allImages.splice(imageIndex, 1);
+                if (offset > 0) offset -= 1;
+                scheduleGalleryRender();
+            }
+        } else {
+            if (matchesFilter) {
+                allImages.unshift(incomingFile);
+                offset += 1;
+
+                const modalContainer = document.getElementById('modal-container');
+                if (modalContainer && modalContainer.style.display === 'block') {
+                    currentIndex += 1;
+                }
+
+                scheduleGalleryRender();
+            }
+        }
+
+        debouncedLoadAlbumOptions();
+
+    } catch (err) {
+        console.error("Real-time pipeline refresh error:", err);
+    }
+};
+
     socket.onclose = () => { setTimeout(setupWebSocket, 3000); };
 }
-
-
-
 
 // --- Image Carousel Lightbox Functions ---
 function updateTransform() {
@@ -522,40 +763,380 @@ function updateTransform() {
     if (modalImg) modalImg.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
 }
 
-function openModal(imgIndex) {
-    currentIndex = imgIndex;
-    const name = allImages[currentIndex];
-    if (!name) return;
+// Open Modal at specific index
+function openModal(index) {
+    if (!allImages || allImages.length === 0) return;
+    currentIndex = index;
 
-    const container = document.getElementById('modal-container');
-    const modalImg = document.getElementById('modal-img');
+    const modal = document.getElementById('modal-container');
+    modal.style.display = 'flex';
 
-    scale = 1; translateX = 0; translateY = 0;
-    modalImg.style.transform = 'translate(0px, 0px) scale(1)';
-    modalImg.src = `/images/${name}`;
-    container.style.display = 'block';
+    // 🔒 LOCK BODY SCROLLING
+    document.body.classList.add('modal-open');
+
+    loadLightboxImage(currentIndex);
+    
+    // Attach keyboard event listener
+    window.addEventListener('keydown', handleKeyPress);
 }
-
+// Close Modal
 function closeModal() {
-    document.getElementById('modal-container').style.display = 'none';
-    document.getElementById('modal-img').src = '';
-}
+    const modal = document.getElementById('modal-container');
+    modal.style.display = 'none';
 
+    // 🔓 UNLOCK BODY SCROLLING
+    document.body.classList.remove('modal-open');
+
+    // Reset pan/zoom state
+    resetPanZoom();
+
+    if (currentAbortController) {
+        currentAbortController.abort();
+    }
+
+    window.removeEventListener('keydown', handleKeyPress);
+}
+// Target-based click closing (for clicking background overlay)
 function closeModalTarget(event) {
-    if (event.target.id === 'modal-container' || event.target.className === 'panzoom-wrapper') {
+    if (event.target.id === 'modal-container') {
         closeModal();
     }
 }
 
+let isTransitioning = false;
+
 function nextImage(event) {
     if (event) event.stopPropagation();
-    openModal((currentIndex + 1) >= allImages.length ? 0 : currentIndex + 1);
+    if (isTransitioning) return;
+    navigateWithFade('next');
 }
 
 function prevImage(event) {
     if (event) event.stopPropagation();
-    openModal((currentIndex - 1) < 0 ? allImages.length - 1 : currentIndex - 1);
+    if (isTransitioning) return;
+    navigateWithFade('prev');
 }
+
+// Update lightbox opening logic to align index with the full manifest
+// Lightbox opener with fallback fetch
+
+async function openLightboxByFilename(filename) {
+    // 1. Ensure manifest is loaded
+    if (!globalManifest || globalManifest.length === 0) {
+        await initManifest();
+    }
+
+    const modal = document.getElementById('lightbox-modal');
+    if (modal) modal.classList.remove('hidden');
+
+    // 2. Find starting index
+    const foundIndex = globalManifest.indexOf(filename);
+    currentIndex = (foundIndex !== -1) ? foundIndex : 0;
+
+    // 3. FORCE COUNTER REFRESH IMMEDIATELY
+    updateCounterDisplay();
+
+    // 4. Load image
+    loadLightboxImage(currentIndex);
+}
+// Navigating cycles through ALL images in the manifest
+
+
+// Variable to track if page fetching is in progress
+let isLoadingNextPage = false;
+
+
+
+async function navigateWithFade(direction) {
+    if (!allImages || allImages.length === 0) return;
+
+    const imgElement = document.getElementById('modal-img');
+    if (!imgElement) return;
+
+    isTransitioning = true;
+    resetPanZoom();
+
+    let targetIndex = currentIndex;
+
+    if (direction === 'next') {
+        targetIndex = currentIndex + 1;
+    } else {
+        targetIndex = currentIndex - 1;
+    }
+
+    // 🚀 REACHED END OF CURRENTLY LOADED ARRAY (e.g. index 30 of 30)
+   if (direction === 'next' && targetIndex >= allImages.length) {
+    console.log(`🚨 [NAVIGATION] Reached end of loaded array (${allImages.length} items). Fetching more...`);
+
+    if (!isLoadingNextPage) {
+        isLoadingNextPage = true;
+        const countFetched = await fetchNextPageOfImages();
+        isLoadingNextPage = false;
+
+        console.log(`🏁 [NAVIGATION] Fetch completed. New countFetched = ${countFetched}, total allImages = ${allImages.length}`);
+
+        if (countFetched === 0) {
+            console.warn(`⚠️ [NAVIGATION] Backend has no more images. Looping to 0.`);
+            targetIndex = 0;
+        } else {
+            // Target index 30 is now valid because allImages length is > 30!
+            console.log(`🎉 [NAVIGATION] Successfully extended array. Moving to index ${targetIndex}`);
+        }
+    } else {
+        console.log(`⏳ [NAVIGATION] Fetch already in progress, skipping duplicate call.`);
+    }
+}
+
+    // Fade OUT and swap to target index
+    imgElement.classList.add('fade-out');
+
+    setTimeout(() => {
+        currentIndex = targetIndex;
+
+        // Update counter (will now correctly show 31 / 60)
+        updateCounterDisplay();
+
+        // Load image 31
+        loadLightboxImage(currentIndex);
+
+        imgElement.classList.remove('fade-out');
+
+        setTimeout(() => {
+            isTransitioning = false;
+        }, 150);
+
+    }, 150);
+}
+
+
+let currentPage = 1;
+
+
+// Keep track of the currently selected active album in JS state
+let currentActiveAlbum = 'all'; // Default to 'all', updated whenever user selects an album tab
+
+async function fetchNextPageOfImages() {
+    const offset = allImages.length;
+    const limit = 30;
+
+    // 💡 Build query parameters including active album filter
+    let url = `/api/images?offset=${offset}&limit=${limit}`;
+    
+    if (currentActiveAlbum && currentActiveAlbum !== 'all') {
+        url += `&album=${encodeURIComponent(currentActiveAlbum)}`;
+    }
+
+    console.log(`📡 [PAGINATION] Requesting url: ${url}`);
+    
+    try {
+        const response = await fetch(url);
+        if (!response.ok) return 0;
+
+        const data = await response.json(); // { images: [...], has_more: boolean }
+        
+        // If has_more is false and images array is empty, we reached the end of the album!
+        const newBatch = (data.images || []).map(item => item.filename);
+
+        if (newBatch.length === 0) {
+            console.log(`🏁 Reached end of album "${currentActiveAlbum}". No more images.`);
+            return 0;
+        }
+
+        allImages.push(...newBatch);
+
+        if (typeof renderGridCards === 'function') {
+            renderGridCards(data.images);
+        }
+
+        return newBatch.length;
+    } catch (err) {
+        console.error('❌ [PAGINATION] Album fetch failed:', err);
+        return 0;
+    }
+}
+
+// Lightbox loader targets filenames from globalManifest
+
+function loadLightboxImage(index) {
+    if (!allImages || allImages.length === 0) return;
+
+    const filename = allImages[index];
+    if (!filename) return;
+
+    updateCounterDisplay();
+
+    const imgElement = document.getElementById('modal-img');
+    const spinner = document.getElementById('lightbox-spinner');
+
+    if (currentAbortController) currentAbortController.abort();
+    currentAbortController = new AbortController();
+
+    if (spinner) spinner.classList.remove('hidden');
+
+    const cleanStem = filename.includes('.') 
+        ? filename.substring(0, filename.lastIndexOf('.')) 
+        : filename;
+
+    const thumbUrl = `/thumb/${cleanStem}.jpg`;
+    const fullResUrl = `/images/${filename}`;
+
+    // Reset RAM for low-end mobile hardware
+    imgElement.src = '';
+
+    // Test if thumbnail exists before assigning
+    const thumbTester = new Image();
+    thumbTester.src = thumbUrl;
+    
+    thumbTester.onload = () => {
+        if (currentIndex === index) {
+            imgElement.src = thumbUrl; // Show low-res preview first
+        }
+    };
+    
+    thumbTester.onerror = () => {
+        // Thumbnail 404s -> Skip straight to full resolution image
+        console.warn(`[THUMBNAIL 404] Missing thumbnail for ${filename}, loading full resolution directly.`);
+    };
+
+    // Load full-resolution image
+    const highResImg = new Image();
+    highResImg.src = fullResUrl;
+
+    const handleSuccess = () => {
+        if (currentIndex === index) {
+            imgElement.src = fullResUrl;
+            if (spinner) spinner.classList.add('hidden');
+        }
+    };
+
+    const handleError = () => {
+        if (currentIndex === index) {
+            console.error(`❌ Failed to load image: ${fullResUrl}`);
+            if (spinner) spinner.classList.add('hidden');
+        }
+    };
+
+    if ('decode' in highResImg) {
+        highResImg.decode().then(handleSuccess).catch(handleError);
+    } else {
+        highResImg.onload = handleSuccess;
+        highResImg.onerror = handleError;
+    }
+}
+
+
+
+// Navigate Next / Prev
+function navigateLightbox(direction) {
+    if (!allImages || allImages.length === 0) return;
+
+    let newIndex = currentIndex + direction;
+    if (newIndex < 0) newIndex = allImages.length - 1;
+    if (newIndex >= allImages.length) newIndex = 0;
+
+    currentIndex = newIndex;
+
+    // Load instantly
+    loadLightboxImage(currentIndex);
+}
+
+
+// ⌨️ Keyboard Shortcuts (Arrow Left, Arrow Right, Escape)
+function handleKeyPress(event) {
+    if (event.key === 'ArrowRight') {
+        nextImage();
+    } else if (event.key === 'ArrowLeft') {
+        prevImage();
+    } else if (event.key === 'Escape') {
+        closeModal();
+    }
+}
+
+// 🎯 Fast Image Loading with Instant Thumbnail & Abort Control
+function loadLightboxImage(index) {
+    const imgElement = document.getElementById('modal-img');
+    const spinner = document.getElementById('lightbox-spinner');
+    const filename = allImages[index];
+
+    if (!filename) return;
+
+    // 1. Abort previous unfinished requests
+    if (currentAbortController) {
+        currentAbortController.abort();
+    }
+    currentAbortController = new AbortController();
+
+    // 2. SHOW SPINNER
+    if (spinner) spinner.classList.remove('hidden');
+
+    const cleanStem = filename.includes('.') 
+        ? filename.substring(0, filename.lastIndexOf('.')) 
+        : filename;
+        
+    const thumbUrl = `/thumb/${cleanStem}.jpg`;
+    const fullResUrl = `/images/${filename}`;
+
+    // 3. 🧹 MEMORY GARBAGE COLLECTION FOR BUDGET PHONES:
+    // Force browser to dump the previous high-res image bitmap from RAM
+    imgElement.src = '';
+
+    // Show thumbnail instantly first
+    imgElement.classList.add('loading');
+    imgElement.src = thumbUrl; 
+
+    // 4. Decode full-resolution image in background
+    const highResImg = new Image();
+    highResImg.src = fullResUrl;
+
+    const handleSuccess = () => {
+        if (currentIndex === index) {
+            imgElement.src = fullResUrl;
+            imgElement.classList.remove('loading');
+            // HIDE SPINNER
+            if (spinner) spinner.classList.add('hidden');
+        }
+    };
+
+    const handleError = () => {
+        if (currentIndex === index) {
+            imgElement.classList.remove('loading');
+            // HIDE SPINNER
+            if (spinner) spinner.classList.add('hidden');
+        }
+    };
+
+    if ('decode' in highResImg) {
+        highResImg.decode().then(handleSuccess).catch(handleError);
+    } else {
+        highResImg.onload = handleSuccess;
+        highResImg.onerror = handleError;
+    }
+
+    // 5. Preload adjacent images
+    preloadAdjacentImages(index);
+}
+
+
+
+
+
+// 🔮 Preload next and previous high-res images
+function preloadAdjacentImages(index) {
+    const nextIdx = (index + 1) % allImages.length;
+    const prevIdx = (index - 1 + allImages.length) % allImages.length;
+
+    [nextIdx, prevIdx].forEach(idx => {
+        const file = allImages[idx];
+        if (file) {
+            const preloadImg = new Image();
+            preloadImg.src = `/images/${file}`;
+        }
+    });
+}
+
+
+
+
 
 // --- Window Scroll Pagination ---
 window.onscroll = () => {
@@ -593,48 +1174,38 @@ wrapper.addEventListener('mousedown', (e) => { if (scale > 1 && e.button === 0) 
 window.addEventListener('mousemove', (e) => { if (isDragging && scale > 1) { translateX = e.clientX - startX; translateY = e.clientY - startY; updateTransform(); } });
 window.addEventListener('mouseup', () => { if (isDragging) { isDragging = false; wrapper.style.cursor = 'default'; } });
 
+
+
+
+
+
 function forgetPassword() {
     sessionStorage.removeItem('gallery_session_pwd');
     alert("Session cleared.");
 }
 
-//loadAlbumDropdownOptions();
-//setupWebSocket();
-//loadImages();
-
-
 async function bootAppWithVanityRouting() {
-    // 1. Rebuild the options list from the backend database categories
     await loadAlbumDropdownOptions();
-    
-    // 2. Extract the address URL path parameter
+
     const pathParts = window.location.pathname.split('/');
     const urlAlbum = pathParts[1] && pathParts[1] !== "" ? decodeURIComponent(pathParts[1]) : "all";
 
-    // Ensure we are looking at a real album name, not a system resource asset
     if (urlAlbum !== "all" && urlAlbum !== "static" && urlAlbum !== "api" && urlAlbum !== "images" && urlAlbum !== "thumb") {
         const albumSelect = document.getElementById('album-select');
         if (albumSelect) {
-            
-            // 🎯 CASE-INSENSITIVE CHECK: 
-            // Turn everything lowercase to find a match, regardless of how the user typed it
             const targetLower = urlAlbum.toLowerCase();
             let matchedOptionValue = null;
 
             for (let i = 0; i < albumSelect.options.length; i++) {
                 if (albumSelect.options[i].value.toLowerCase() === targetLower) {
-                    // Found a match! Capture the exact case string expected by your Rust backend database
                     matchedOptionValue = albumSelect.options[i].value;
                     break;
                 }
             }
 
-            // If the matching folder exists in your dropdown, use its exact database string casing style
             if (matchedOptionValue !== null) {
                 albumSelect.value = matchedOptionValue;
             } else {
-                // If it's a completely fresh shared album link space with no files yet,
-                // fall back to using the exact string provided in the URL path address text
                 const opt = document.createElement('option');
                 opt.value = urlAlbum;
                 opt.innerText = `📂 ${urlAlbum}`;
@@ -643,13 +1214,95 @@ async function bootAppWithVanityRouting() {
             }
         }
     }
-    
-    // 3. Fetch data array grids from backend API routes
+
     await loadImages();
-    
-    // 4. Fire up your persistent WebSocket listener
     setupWebSocket();
 }
 
-// Execute the final synchronized startup routine!
+// Execute synchronized startup sequence
 bootAppWithVanityRouting();
+
+
+// ==========================================
+// 📱 TOUCH & SWIPE NAVIGATION LOGIC
+// ==========================================
+
+let touchStartX = 0;
+let touchStartY = 0;
+let touchEndX = 0;
+let touchEndY = 0;
+
+// Minimum horizontal distance (in pixels) to trigger a swipe
+const minSwipeDistance = 50; 
+// Maximum vertical threshold to prevent triggering swipe when scrolling vertically
+const maxVerticalTolerance = 80; 
+
+
+function initTouchEvents() {
+    const modal = document.getElementById('modal-container');
+    if (!modal) return;
+
+    modal.addEventListener('touchstart', handleTouchStart, { passive: true });
+    // Set passive: false so e.preventDefault() works cleanly on touchmove
+    modal.addEventListener('touchmove', handleTouchMove, { passive: false });
+    modal.addEventListener('touchend', handleTouchEnd, { passive: true });
+}
+
+
+function handleTouchStart(e) {
+    // Record initial touch coordinates
+    touchStartX = e.changedTouches[0].screenX;
+    touchStartY = e.changedTouches[0].screenY;
+}
+
+
+function handleTouchMove(e) {
+    // Prevent the default browser behavior (prevents background scroll & pull-to-refresh)
+    if (e.cancelable) {
+        e.preventDefault();
+    }
+
+    touchEndX = e.changedTouches[0].screenX;
+    touchEndY = e.changedTouches[0].screenY;
+}
+
+function handleTouchEnd(e) {
+    touchEndX = e.changedTouches[0].screenX;
+    touchEndY = e.changedTouches[0].screenY;
+
+    handleSwipeGesture();
+}
+
+function handleSwipeGesture() {
+    const deltaX = touchEndX - touchStartX;
+    const deltaY = touchEndY - touchStartY;
+
+    if (Math.abs(deltaY) > maxVerticalTolerance) return;
+
+    if (Math.abs(deltaX) >= minSwipeDistance) {
+        if (deltaX < 0) {
+            // Swiped Left 👈 -> Slide to Next
+            nextImage();
+        } else {
+            // Swiped Right 👉 -> Slide to Previous
+            prevImage();
+        }
+    }
+}
+
+// Ensure listeners are initialized when DOM is ready
+document.addEventListener('DOMContentLoaded', initTouchEvents);
+
+function resetPanZoom() {
+    const imgElement = document.getElementById('modal-img');
+    if (!imgElement) return;
+
+    // Reset inline CSS transforms
+    imgElement.style.transform = 'none';
+    imgElement.style.transformOrigin = 'center center';
+
+    // Reset custom tracking variables if you are keeping state manually
+    if (typeof currentScale !== 'undefined') currentScale = 1;
+    if (typeof currentPanX !== 'undefined') currentPanX = 0;
+    if (typeof currentPanY !== 'undefined') currentPanY = 0;
+}

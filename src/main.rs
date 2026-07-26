@@ -5,7 +5,15 @@ use axum::{
     response::{Html, IntoResponse, Json},
     routing::{get, post},
     Router,
+    
+    
 };
+
+
+
+
+
+use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::net::SocketAddr;
@@ -14,7 +22,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tower_http::services::ServeDir;
 use tower::ServiceBuilder;
 use sqlx::{SqlitePool, Row};
-use tokio::sync::broadcast;
+
+use tokio::sync::{broadcast, Semaphore};
+
+
+
+
+
 
 #[derive(Deserialize)]
 struct DeleteRequest {
@@ -37,7 +51,9 @@ struct AssignAlbumRequest {
     password: Option<String>,
 }
 
-#[derive(Deserialize)]
+
+
+#[derive(Debug, Deserialize)]
 struct ImageQuery {
     offset: usize,
     limit: usize,
@@ -46,7 +62,12 @@ struct ImageQuery {
     min_size: Option<i64>,
     max_size: Option<i64>,
     album: Option<String>,
+
+
+    
 }
+
+
 
 #[derive(Serialize)]
 struct AlbumListResponse {
@@ -81,7 +102,19 @@ struct AppState {
     thumbnails_dir: String,
     tx: broadcast::Sender<UploadResponse>,
     master_password: String,
+    // 🆕 Limit concurrent heavy CPU work (e.g., max 2 processing threads)
+    cpu_semaphore: Arc<Semaphore>,
 }
+
+
+// 1. Embed the binary bytes of favicon.ico at compile time
+const FAVICON_ICO: &[u8] = include_bytes!("../static/favicon.ico");
+
+// 2. Create the handler function
+async fn favicon_handler() -> impl IntoResponse {
+    ([(header::CONTENT_TYPE, "image/x-icon")], FAVICON_ICO)
+}
+
 
 #[tokio::main]
 async fn main() {
@@ -241,6 +274,7 @@ async fn main() {
     let (tx, _rx) = broadcast::channel(16);
     
     let index_html_content = include_str!("../static/index.html");
+    
     let style_css_content = include_str!("../static/style.css");
     let app_js_content = include_str!("../static/app.js");
 
@@ -250,10 +284,13 @@ async fn main() {
         thumbnails_dir,
         tx,
         master_password,
+        // 🎯 Restrict CPU image processing to 2 concurrent worker tasks
+    cpu_semaphore: Arc::new(Semaphore::new(2)),
     };
 
     let app = Router::new()
         .route("/", get(move || async move { Html(index_html_content) }))
+        .route("/favicon.ico", get(favicon_handler))
         .route("/static/style.css", get(move || async move {
             ([(header::CONTENT_TYPE, "text/css")], style_css_content)
         }))
@@ -269,6 +306,7 @@ async fn main() {
         .route("/thumb/:filename", get(get_thumbnail))
         .route("/api/delete", post(delete_image))
         .nest_service("/images", ServeDir::new(&state.images_dir))
+        .route("/api/images/manifest", get(get_image_manifest))
        
       .route("/:album_name", get(vanity_album_index))
         .with_state(state)
@@ -280,26 +318,33 @@ async fn main() {
     axum::serve(listener, app).await.unwrap();
 }
 
+
 async fn upload_image(
     State(state): State<AppState>,
     mut multipart: Multipart,
 ) -> impl IntoResponse {
-    let mut file_data = Vec::new();
-    let mut filename = String::new();
+    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
     let mut password_provided = String::new();
     let mut album_tag: Option<String> = None;
 
-    while let Some(field) = multipart.next_field().await.unwrap() {
-        let name = field.name().unwrap().to_string();
+    // Parse incoming multipart data
+    while let Ok(Some(field)) = multipart.next_field().await {
+        let name = field.name().unwrap_or("").to_string();
         match name.as_str() {
-            "password" => { password_provided = field.text().await.unwrap(); }
-            "album" => {
-                let text_val = field.text().await.unwrap().trim().to_string();
-                if !text_val.is_empty() { album_tag = Some(text_val); }
+            "password" => {
+                if let Ok(text) = field.text().await { password_provided = text; }
             }
-            "image" => {
-                filename = field.file_name().unwrap().to_string();
-                file_data = field.bytes().await.unwrap().to_vec();
+            "album" => {
+                if let Ok(text) = field.text().await {
+                    let text_val = text.trim().to_string();
+                    if !text_val.is_empty() { album_tag = Some(text_val); }
+                }
+            }
+            "image" | "images" | "files" => {
+                let filename = field.file_name().unwrap_or("uploaded.jpg").to_string();
+                if let Ok(bytes) = field.bytes().await {
+                    if !bytes.is_empty() { files.push((filename, bytes.to_vec())); }
+                }
             }
             _ => {}
         }
@@ -309,59 +354,109 @@ async fn upload_image(
         return (StatusCode::UNAUTHORIZED, "Incorrect master password").into_response();
     }
 
-    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
-    let unique_filename = format!("{}_{}", timestamp, filename);
-    let save_path = PathBuf::from(&state.images_dir).join(&unique_filename);
-
-    if fs::write(&save_path, &file_data).is_err() {
-        return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to write file").into_response();
+    if files.is_empty() {
+        return (StatusCode::BAD_REQUEST, "No image files provided").into_response();
     }
 
-    let file_size = file_data.len() as i64;
     let clean_album = album_tag.unwrap_or_default();
 
- // ⏱️ Get the absolute current Unix timestamp in seconds
-let timestamp = SystemTime::now()
-    .duration_since(UNIX_EPOCH)
-    .unwrap()
-    .as_secs() as i64;
-    
-            // 🎯 Your exact insert block:
-        let insert_res = sqlx::query(
-            "INSERT INTO images (filename, created_at, file_size) VALUES (?, ?, ?);"
-        )
-        .bind(&unique_filename)
-        .bind(timestamp) // Pass the dynamic timestamp variable here
-        .bind(file_size as i64) // Cast to i64 to ensure type safety with SQLite
-        .execute(&state.db)
-        .await;
+    // 🚀 Fast-path: Save raw files to disk instantly
+    let mut queued_files = Vec::new();
 
+    for (filename, file_data) in files {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
 
-    if let Ok(result) = insert_res {
-        let image_id = result.last_insert_rowid();
-        if !clean_album.is_empty() {
-            let _ = sqlx::query("INSERT OR IGNORE INTO albums (name) VALUES (?);").bind(&clean_album).execute(&state.db).await;
-            if let Ok(row) = sqlx::query("SELECT id FROM albums WHERE name = ?;").bind(&clean_album).fetch_one(&state.db).await {
-                let album_id: i64 = row.get(0);
-                let _ = sqlx::query("INSERT OR IGNORE INTO image_albums (image_id, album_id) VALUES (?, ?);").bind(image_id).bind(album_id).execute(&state.db).await;
-            }
+        let unique_filename = format!("{}_{}", timestamp, filename);
+        let save_path = PathBuf::from(&state.images_dir).join(&unique_filename);
+
+        if fs::write(&save_path, &file_data).is_ok() {
+            queued_files.push((unique_filename, save_path, file_data.len() as i64));
         }
-        
-       
-        let response_payload = UploadResponse { 
-    action: "upload".to_string(), // 🎯 Add this line
-    filename: unique_filename, 
-    album: clean_album 
-};
-        let _ = state.tx.send(response_payload.clone());
-        return Json(response_payload).into_response();
     }
 
+    // 🎯 Spawn background processing task (doesn't block the HTTP response)
+    let state_clone = state.clone();
+    let album_clone = clean_album.clone();
 
+    tokio::spawn(async move {
+        for (unique_filename, save_path, file_size) in queued_files {
+            let timestamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64;
 
+            let clean_stem = unique_filename
+                .rfind('.')
+                .map(|p| &unique_filename[..p])
+                .unwrap_or(&unique_filename);
+            
+            let thumb_path = PathBuf::from(&state_clone.thumbnails_dir).join(format!("{}.jpg", clean_stem));
+            
+            let img_path_clone = save_path.clone();
+            let semaphore = state_clone.cpu_semaphore.clone();
 
-    (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response()
+            // Perform CPU-heavy thumbnail extraction in background thread pool
+            tokio::task::spawn_blocking(move || {
+                let _permit = semaphore.try_acquire();
+                generate_oriented_thumbnail(&img_path_clone, &thumb_path);
+            }).await.ok();
+
+            // Insert into SQLite database
+            let insert_res = sqlx::query(
+                "INSERT INTO images (filename, created_at, file_size) VALUES (?, ?, ?);"
+            )
+            .bind(&unique_filename)
+            .bind(timestamp)
+            .bind(file_size)
+            .execute(&state_clone.db)
+            .await;
+
+            if let Ok(result) = insert_res {
+                let image_id = result.last_insert_rowid();
+
+                if !album_clone.is_empty() {
+                    let _ = sqlx::query("INSERT OR IGNORE INTO albums (name) VALUES (?);")
+                        .bind(&album_clone)
+                        .execute(&state_clone.db)
+                        .await;
+
+                    if let Ok(row) = sqlx::query("SELECT id FROM albums WHERE name = ?;")
+                        .bind(&album_clone)
+                        .fetch_one(&state_clone.db)
+                        .await
+                    {
+                        let album_id: i64 = row.get(0);
+                        let _ = sqlx::query("INSERT OR IGNORE INTO image_albums (image_id, album_id) VALUES (?, ?);")
+                            .bind(image_id)
+                            .bind(album_id)
+                            .execute(&state_clone.db)
+                            .await;
+                    }
+                }
+
+                // 📡 Broadcast live update over WebSocket as EACH image finishes
+                let response_payload = UploadResponse {
+                    action: "upload".to_string(),
+                    filename: unique_filename,
+                    album: album_clone.clone(),
+                };
+
+                let _ = state_clone.tx.send(response_payload);
+            }
+        }
+    });
+
+    // ⚡ Return IMMEDIATELY to the user interface
+    (StatusCode::OK, Json(serde_json::json!({ "status": "queued" }))).into_response()
 }
+
+
+
+
+
 
 // 🛠️ CUSTOM HANDLER: Assigns albums to existing photos cleanly without modifying core vectors
 async fn assign_album_to_existing_image(
@@ -417,13 +512,26 @@ async fn get_images_json(
     let limit = pagination.limit as i64;
 
     // 1. SELECT both the filename and its matching album name dynamically
-    let mut query_str = "
-        SELECT i.filename, COALESCE(a.name, '') as album_name 
+    // let mut query_str = "
+    //     SELECT i.filename, COALESCE(a.name, '') as album_name 
+    //     FROM images i
+    //     LEFT JOIN image_albums ia ON i.id = ia.image_id
+    //     LEFT JOIN albums a ON ia.album_id = a.id
+    //     WHERE 1=1
+    // ".to_string();
+
+  let mut query_str = "
+        SELECT 
+            i.filename,
+            COALESCE(a.name, '') as album_name ,
+            COUNT(*) OVER() as total_count
         FROM images i
         LEFT JOIN image_albums ia ON i.id = ia.image_id
         LEFT JOIN albums a ON ia.album_id = a.id
         WHERE 1=1
     ".to_string();
+
+
 
     // Append filters
     if let Some(ref alb) = pagination.album {
@@ -464,12 +572,14 @@ async fn get_images_json(
 
     // 2. Count query for pagination tracking
     let mut count_str = "
-        SELECT COUNT(*) 
+        SELECT COUNT(DISTINCT i.id) 
         FROM images i
         LEFT JOIN image_albums ia ON i.id = ia.image_id
         LEFT JOIN albums a ON ia.album_id = a.id
         WHERE 1=1
     ".to_string();
+
+
 
     if let Some(ref alb) = pagination.album {
         if alb != "all" && !alb.is_empty() { count_str.push_str(" AND a.name = ?"); }
@@ -512,57 +622,59 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
 
 
 // ⚙️ UPDATED HANDLER: Calls our auto-orienting helper function safely
-async fn get_thumbnail(State(state): State<AppState>, Path(filename): Path<String>) -> impl IntoResponse {
+
+ async fn get_thumbnail(
+    State(state): State<AppState>,
+    Path(filename): Path<String>,
+) -> impl IntoResponse {
     let thumb_path = PathBuf::from(&state.thumbnails_dir).join(&filename);
-    if thumb_path.exists() {
-        if let Ok(bytes) = fs::read(&thumb_path) { 
-            return ([(header::CONTENT_TYPE, "image/jpeg")], bytes).into_response(); 
+
+    // Async file check
+    if tokio::fs::try_exists(&thumb_path).await.unwrap_or(false) {
+        if let Ok(bytes) = tokio::fs::read(&thumb_path).await {
+            return ([(header::CONTENT_TYPE, "image/jpeg")], bytes).into_response();
         }
     }
 
+    // Fallback DB lookup
     let base_stem = filename.rfind('.').map(|p| &filename[..p]).unwrap_or(&filename);
     let search_pattern = format!("{}.%", base_stem);
-    let fallback_row = sqlx::query("SELECT filename FROM images WHERE filename LIKE ? LIMIT 1")
+
+    let original_filename: String = sqlx::query("SELECT filename FROM images WHERE filename LIKE ? LIMIT 1")
         .bind(&search_pattern)
         .fetch_optional(&state.db)
-        .await;
-
-    let original_filename = match fallback_row {
-        Ok(Some(row)) => row.get::<String, _>("filename"),
-        _ => filename.clone(),
-    };
+        .await
+        .ok()
+        .flatten()
+        .map(|row| row.get("filename"))
+        .unwrap_or(filename.clone());
 
     let image_path = PathBuf::from(&state.images_dir).join(&original_filename);
-    if !image_path.exists() { return (StatusCode::NOT_FOUND, "Not Found").into_response(); }
+    if !tokio::fs::try_exists(&image_path).await.unwrap_or(false) {
+        return (StatusCode::NOT_FOUND, "Not Found").into_response();
+    }
 
-    let t_path = thumb_path.clone();
-    let i_path = image_path.clone();
-
-    // Spawn the task using our new orientation-aware function
-    let res = tokio::task::spawn_blocking(move || {
-        generate_oriented_thumbnail(&i_path, &t_path)
+    // Generate thumbnail in blocking task
+    let res = tokio::task::spawn_blocking({
+        let i_path = image_path.clone();
+        let t_path = thumb_path.clone();
+        move || generate_oriented_thumbnail(&i_path, &t_path)
     }).await;
 
-    if res.is_ok() && res.unwrap() {
-        if let Ok(bytes) = fs::read(&thumb_path) { 
-            return ([(header::CONTENT_TYPE, "image/jpeg")], bytes).into_response(); 
+    match res {
+        Ok(true) => {
+            if let Ok(bytes) = tokio::fs::read(&thumb_path).await {
+                ([(header::CONTENT_TYPE, "image/jpeg")], bytes).into_response()
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            }
         }
+        _ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
-    StatusCode::INTERNAL_SERVER_ERROR.into_response()
 }
 
 
 
-
-// async fn delete_image(State(state): State<AppState>, Json(req): Json<DeleteRequest>) -> impl IntoResponse {
-//     if req.password.as_deref() != Some(&state.master_password) { return (StatusCode::UNAUTHORIZED).into_response(); }
-//     let _ = sqlx::query("DELETE FROM images WHERE filename = ?;").bind(&req.filename).execute(&state.db).await;
-//     let _ = fs::remove_file(PathBuf::from(&state.images_dir).join(&req.filename));
-//     if let Some(p) = req.filename.rfind('.') {
-//         let _ = fs::remove_file(PathBuf::from(&state.thumbnails_dir).join(format!("{}.jpg", &req.filename[..p])));
-//     }
-//     StatusCode::OK.into_response()
-// }
 
 
 async fn delete_image(
@@ -619,54 +731,85 @@ async fn get_albums_list(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 
-// 🛠️ FIX: Correct matching on TagValue variants for the rexif crate
+
+use image::imageops::FilterType;
+
 fn generate_oriented_thumbnail(img_path: &std::path::Path, thumb_path: &std::path::Path) -> bool {
     let mut raw_img = match image::open(img_path) {
         Ok(img) => img,
         Err(_) => return false,
     };
 
-    // Attempt to read EXIF data to check for orientation tags
+    // Check EXIF Orientation tags
     if let Ok(metadata) = rexif::parse_file(img_path) {
         for entry in metadata.entries {
             if entry.tag == rexif::ExifTag::Orientation {
                 let mut orientation_value = 1;
 
-                // Match directly against rexif's actual TagValue variants
                 match &entry.value {
-                    rexif::TagValue::U16(vec) => {
-                        if let Some(&val) = vec.first() { orientation_value = val; }
-                    }
-                    rexif::TagValue::U32(vec) => {
-                        if let Some(&val) = vec.first() { orientation_value = val as u16; }
-                    }
-                    rexif::TagValue::I16(vec) => {
-                        if let Some(&val) = vec.first() { orientation_value = val as u16; }
-                    }
-                    rexif::TagValue::I32(vec) => {
-                        if let Some(&val) = vec.first() { orientation_value = val as u16; }
-                    }
-                    _ => {} // Fallback for unmatched types
+                    rexif::TagValue::U16(vec) => { if let Some(&val) = vec.first() { orientation_value = val; } }
+                    rexif::TagValue::U32(vec) => { if let Some(&val) = vec.first() { orientation_value = val as u16; } }
+                    rexif::TagValue::I16(vec) => { if let Some(&val) = vec.first() { orientation_value = val as u16; } }
+                    rexif::TagValue::I32(vec) => { if let Some(&val) = vec.first() { orientation_value = val as u16; } }
+                    _ => {}
                 }
 
-                // Rotate the image buffer based on standard EXIF Orientation definitions
                 raw_img = match orientation_value {
                     3 => raw_img.rotate180(),
                     6 => raw_img.rotate90(),
                     8 => raw_img.rotate270(),
-                    _ => raw_img, // 1 is normal layout orientation
+                    _ => raw_img,
                 };
                 break;
             }
         }
     }
 
-    // Generate a clean 300x300 thumbnail with corrected rotation
-    let thumbnail = raw_img.thumbnail(300, 300);
+    // 🎯 Fast downscaling filter (Triangle is ~4x faster than Lanczos3)
+    let thumbnail = raw_img.resize_to_fill(300, 300, FilterType::Triangle);
     thumbnail.save_with_format(thumb_path, image::ImageFormat::Jpeg).is_ok()
 }
+
+
+
+
 
 async fn vanity_album_index(axum::extract::Path(_album_name): axum::extract::Path<String>) -> impl axum::response::IntoResponse {
     let index_html_content = include_str!("../static/index.html");
     axum::response::Html(index_html_content)
+}
+
+
+/// Handler that returns a light JSON array of all image filenames
+
+pub async fn get_image_manifest() -> impl IntoResponse {
+    // Check ./images relative path
+    let images_dir = std::path::Path::new("./images");
+
+    let mut filenames: Vec<String> = Vec::new();
+
+    if let Ok(entries) = std::fs::read_dir(images_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
+                    let ext_lower = ext.to_lowercase();
+                    if matches!(ext_lower.as_str(), "jpg" | "jpeg" | "png" | "webp" | "gif" | "avif") {
+                        if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
+                            filenames.push(filename.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        eprintln!("⚠️ [MANIFEST] Failed to read directory ./images from execution path: {:?}", std::env::current_dir());
+    }
+
+    // Sort filenames
+    filenames.sort();
+    
+    println!("📸 [MANIFEST] Found {} total images.", filenames.len());
+
+    (StatusCode::OK, Json(filenames))
 }

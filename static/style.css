@@ -144,19 +144,48 @@ h1 { text-align: center; color: var(--header-color); margin-top: 20px; margin-bo
 .btn-action-cancel { background: #999; color: white; }
 
 #modal-container {
+    /* Prevents default browser gesture conflicts during swipe */
+    touch-action: pan-y; 
+    -webkit-user-select: none;
+    user-select: none;
     display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
     width: 100%; height: 100%; background: rgba(0, 0, 0, 0.95); z-index: 9999; overflow: hidden;
 }
 
 .panzoom-wrapper {
-    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-    display: flex; justify-content: center; align-items: center;
+    overflow: hidden;
+    position: absolute; 
+    top: 0; left: 0; 
+    width: 100%; height: 100%;
+    display: flex; 
+    justify-content: center; 
+    align-items: center;
 }
 
+
+
 #modal-img {
-    max-width: 95%; max-height: 95%; object-fit: contain; display: block;
-    user-select: none; -webkit-user-drag: none; touch-action: none;
-    transition: transform 0.05s ease-out; transform-origin: center center;
+    max-width: 95%; 
+    max-height: 95%; 
+    object-fit: contain; 
+    display: block;
+    user-select: none; 
+    -webkit-user-drag: none; 
+    touch-action: none;
+    pointer-events: none; 
+    transform-origin: center center;
+
+    /* Smooth 150ms opacity transition */
+    transition: opacity 0.15s ease-in-out;
+    opacity: 1;
+    will-change: opacity;
+}
+
+
+
+/* Applied during image swaps */
+#modal-img.fade-out {
+    opacity: 0;
 }
 
 .nav-btn {
@@ -305,4 +334,197 @@ h1 { text-align: center; color: var(--header-color); margin-top: 20px; margin-bo
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+
+.upload-progress-container {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    width: 320px;
+    /* Card background with fallback */
+    background: var(--bg-card, #ffffff);
+    /* High contrast text color */
+    color: var(--text-color, #1f2937);
+    /* Adaptive border using standard CSS color-mix or opacity */
+    border: 1px solid var(--border-color, rgba(0, 0, 0, 0.12));
+    border-radius: 8px;
+    padding: 12px 16px;
+    /* Soft elevation shadow */
+    box-shadow: var(--shadow-md, 0 4px 14px rgba(0, 0, 0, 0.12));
+    z-index: 9999;
+    display: none; /* Hidden by default */
+    opacity: 0;
+    transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+.upload-progress-container.show {
+    display: block;
+    opacity: 1;
+}
+
+.upload-progress-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.85rem;
+    margin-bottom: 8px;
+    font-weight: 500;
+    color: var(--text-primary, inherit);
+}
+
+.upload-progress-bar-bg {
+    width: 100%;
+    height: 6px;
+    /* Track background adapts nicely to light or dark contexts */
+    background: var(--progress-track-bg, rgba(0, 0, 0, 0.08));
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.upload-progress-bar-fill {
+    width: 0%;
+    height: 100%;
+    /* Primary brand/accent color */
+    background: #007acc; /* Light mode fill */
+    /*background: var(--accent-color, #007acc);*/
+    border-radius: 3px;
+    transition: width 0.15s ease-out;
+}
+
+
+/* ==========================================================================
+   🌙 Dark Mode Theme Overrides
+   ========================================================================== */
+
+/* 1. Attribute-based or Class-based Dark Mode */
+[data-theme="dark"] .upload-progress-container,
+body.dark .upload-progress-container {
+    background: var(--bg-card, #1e1e1e);
+    color: var(--text-color, #f3f4f6);
+    border-color: var(--border-color, rgba(255, 255, 255, 0.12));
+    box-shadow: var(--shadow-md, 0 8px 24px rgba(0, 0, 0, 0.5));
+}
+
+[data-theme="dark"] .upload-progress-bar-bg,
+body.dark .upload-progress-bar-bg {
+    background: rgba(255, 255, 255, 0.15);
+}
+
+/* 💡 FORCE EXACT BLUE COLOR IN DARK MODE */
+[data-theme="dark"] .upload-progress-bar-fill,
+body.dark .upload-progress-bar-fill {
+    background: #3b82f6 !important;
+}
+
+/* 2. OS Media Query Fallback */
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .upload-progress-container {
+        background: var(--bg-card, #1e1e1e);
+        color: var(--text-color, #f3f4f6);
+        border-color: var(--border-color, rgba(255, 255, 255, 0.12));
+        box-shadow: var(--shadow-md, 0 8px 24px rgba(0, 0, 0, 0.5));
+    }
+
+    :root:not([data-theme="light"]) .upload-progress-bar-bg {
+        background: rgba(255, 255, 255, 0.15);
+    }
+
+    :root:not([data-theme="light"]) .upload-progress-bar-fill {
+        background: #3b82f6 !important;
+    }
+}
+
+#modal-img {
+    transition: opacity 0.15s ease-in-out;
+    opacity: 1;
+}
+
+#modal-img.loading {
+    opacity: 0.7; /* Gives a subtle indicator while background fetching full-res */
+}
+
+
+/* Prevents background page scrolling when lightbox modal is active */
+body.modal-open {
+    overflow: hidden !important;
+    touch-action: none; /* Disables touch panning on the background page */
+}
+
+
+/* Slide Classes */
+.slide-out-left {
+    transform: translateX(-100%) !important;
+    opacity: 0.3;
+}
+
+.slide-out-right {
+    transform: translateX(100%) !important;
+    opacity: 0.3;
+}
+
+.slide-in-left {
+    transform: translateX(-100%) !important;
+    opacity: 0.3;
+}
+
+.slide-in-right {
+    transform: translateX(100%) !important;
+    opacity: 0.3;
+}
+
+/* Hide navigation buttons on mobile screens / touch devices */
+@media (max-width: 768px) {
+    .nav-btn.prev-btn,
+    .nav-btn.next-btn {
+        display: none !important;
+    }
+}
+
+
+/* Spinner Container */
+.spinner {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 48px;
+    height: 48px;
+    border: 4px solid rgba(255, 255, 255, 0.2);
+    border-top: 4px solid #4da6ff; /* Matches your album button color */
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    z-index: 10010;
+    pointer-events: none;
+    transition: opacity 0.2s ease;
+}
+
+.spinner.hidden {
+    opacity: 0;
+    visibility: hidden;
+}
+
+@keyframes spin {
+    0% { transform: translate(-50%, -50%) rotate(0deg); }
+    100% { transform: translate(-50%, -50%) rotate(360deg); }
+}
+
+/* Lightbox Counter Badge */
+.lightbox-counter {
+    position: absolute;
+    top: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(0, 0, 0, 0.65);
+    color: #ffffff;
+    font-size: 14px;
+    font-weight: 600;
+    font-family: monospace, sans-serif;
+    padding: 6px 14px;
+    border-radius: 20px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    backdrop-filter: blur(4px);
+    z-index: 10020;
+    pointer-events: none;
+    letter-spacing: 0.5px;
 }
