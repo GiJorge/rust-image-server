@@ -222,6 +222,13 @@ h1 { text-align: center; color: var(--header-color); margin-top: 20px; margin-bo
     box-shadow: 0 6px 15px rgba(255, 77, 77, 0.4) !important;
 }
 
+#modal-container button[id="down-btn"]:hover {
+    background: #3cc262 !important;
+    transform: translateY(-2px);
+    box-shadow: 0 6px 15px rgba(77, 255, 122, 0.4) !important;
+}
+
+
 #modal-container button[id="set-album-btn"]:hover {
     background: #3399ff !important;
     transform: translateY(-2px);
@@ -527,4 +534,92 @@ body.modal-open {
     z-index: 10020;
     pointer-events: none;
     letter-spacing: 0.5px;
+}
+
+.lightbox-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.btn-lightbox-action {
+    
+    align-items:end;
+    gap: 6px;
+    padding: 6px 14px;
+    margin-top: 3rem;
+    font-size: 2.85rem;
+    font-weight: 500;
+    color: #ffffff;
+    background: rgba(255, 255, 255, 0.15);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 6px;
+    text-decoration: none;
+    cursor: pointer;
+    transition: background 0.2s ease, transform 0.1s ease;
+}
+
+.btn-lightbox-action:hover {
+    background: rgba(255, 255, 255, 0.3);
+    color: #ffffff;
+    transform: translateY(-1px);
+}
+
+.btn-lightbox-action:active {
+    transform: translateY(0);
+}
+
+@keyframes spin {
+    from {
+        transform: rotate(0deg);
+    }
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+
+/* Floating Navigation Tap Zones */
+.nav-tap-zone {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 10020;
+    width: 48px;
+    height: 72px;
+    background: rgba(0, 0, 0, 0.35);
+    backdrop-filter: blur(4px);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    color: #ffffff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background 0.2s ease, transform 0.1s ease;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.nav-prev {
+    left: 10px;
+    border-radius: 0 16px 16px 0;
+}
+
+.nav-next {
+    right: 10px;
+    border-radius: 16px 0 0 16px;
+}
+
+.nav-tap-zone:active {
+    background: rgba(255, 255, 255, 0.4);
+    transform: translateY(-50%) scale(0.95);
+}
+
+/* On mobile screens, keep buttons prominent and reachable */
+@media (max-width: 600px) {
+    .nav-tap-zone {
+        width: 44px;
+        height: 64px;
+        background: rgba(0, 0, 0, 0.5);
+    }
 }

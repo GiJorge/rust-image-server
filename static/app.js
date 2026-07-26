@@ -798,12 +798,14 @@ function closeModalTarget(event) {
 let isTransitioning = false;
 
 function nextImage(event) {
+    resetPanZoom();
     if (event) event.stopPropagation();
     if (isTransitioning) return;
     navigateWithFade('next');
 }
 
 function prevImage(event) {
+    resetPanZoom();
     if (event) event.stopPropagation();
     if (isTransitioning) return;
     navigateWithFade('prev');
@@ -1018,6 +1020,11 @@ function loadLightboxImage(index) {
 
 
 
+
+
+
+
+
 // Navigate Next / Prev
 function navigateLightbox(direction) {
     if (!allImages || allImages.length === 0) return;
@@ -1044,21 +1051,92 @@ function handleKeyPress(event) {
     }
 }
 
+
+// 🎨 SVG Icon Templates for Button State Feedback
+const SVG_ICONS = {
+    download: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>`,
+    spinner: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="animation: spin 1s linear infinite;"><line x1="12" y1="2" x2="12" y2="6"></line><line x1="12" y1="18" x2="12" y2="22"></line><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"></line><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"></line><line x1="2" y1="12" x2="6" y2="12"></line><line x1="18" y1="12" x2="22" y2="12"></line><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"></line><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"></line></svg>`,
+    success: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>`,
+    error: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>`
+};
+
+async function downloadCurrentLightboxImage() {
+    const downloadBtn = document.getElementById('lightbox-download-btn');
+    const filename = allImages[currentIndex];
+
+    if (!filename) return;
+
+    const fullResUrl = `/images/${filename}`;
+
+    try {
+        // Provide immediate visual feedback (SVG Spinner)
+        if (downloadBtn) {
+            downloadBtn.disabled = true;
+            downloadBtn.innerHTML = SVG_ICONS.spinner;
+        }
+
+        // Fetch image as binary blob
+        const response = await fetch(fullResUrl);
+        if (!response.ok) throw new Error(`HTTP error ${response.status}`);
+
+        const blob = await response.blob();
+        const blobUrl = URL.createObjectURL(blob);
+
+        // Create temporary off-screen anchor tag
+        const link = document.createElement('a');
+        link.href = blobUrl;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+
+        // Cleanup DOM and Blob memory
+        document.body.removeChild(link);
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+
+        // Reset button state to Checkmark SVG
+        if (downloadBtn) {
+            downloadBtn.innerHTML = SVG_ICONS.success;
+            setTimeout(() => {
+                downloadBtn.innerHTML = SVG_ICONS.download;
+                downloadBtn.disabled = false;
+            }, 1500);
+        }
+
+    } catch (err) {
+        console.error('❌ Download failed:', err);
+        if (downloadBtn) {
+            downloadBtn.innerHTML = SVG_ICONS.error;
+            setTimeout(() => {
+                downloadBtn.innerHTML = SVG_ICONS.download;
+                downloadBtn.disabled = false;
+            }, 2000);
+        }
+    }
+}
+
 // 🎯 Fast Image Loading with Instant Thumbnail & Abort Control
+
+// 2. Updated loadLightboxImage function
 function loadLightboxImage(index) {
     const imgElement = document.getElementById('modal-img');
     const spinner = document.getElementById('lightbox-spinner');
+    const downloadBtn = document.getElementById('lightbox-download-btn');
     const filename = allImages[index];
 
     if (!filename) return;
 
-    // 1. Abort previous unfinished requests
+    // Reset download button icon if previously used
+    if (downloadBtn) {
+        downloadBtn.innerHTML = SVG_ICONS.download;
+        downloadBtn.disabled = false;
+    }
+
+    // 1. Abort previous unfinished image decodes
     if (currentAbortController) {
         currentAbortController.abort();
     }
     currentAbortController = new AbortController();
 
-    // 2. SHOW SPINNER
     if (spinner) spinner.classList.remove('hidden');
 
     const cleanStem = filename.includes('.') 
@@ -1068,15 +1146,12 @@ function loadLightboxImage(index) {
     const thumbUrl = `/thumb/${cleanStem}.jpg`;
     const fullResUrl = `/images/${filename}`;
 
-    // 3. 🧹 MEMORY GARBAGE COLLECTION FOR BUDGET PHONES:
-    // Force browser to dump the previous high-res image bitmap from RAM
+    // RAM Cleanup
     imgElement.src = '';
-
-    // Show thumbnail instantly first
     imgElement.classList.add('loading');
     imgElement.src = thumbUrl; 
 
-    // 4. Decode full-resolution image in background
+    // Decode full-res image
     const highResImg = new Image();
     highResImg.src = fullResUrl;
 
@@ -1084,7 +1159,6 @@ function loadLightboxImage(index) {
         if (currentIndex === index) {
             imgElement.src = fullResUrl;
             imgElement.classList.remove('loading');
-            // HIDE SPINNER
             if (spinner) spinner.classList.add('hidden');
         }
     };
@@ -1092,7 +1166,6 @@ function loadLightboxImage(index) {
     const handleError = () => {
         if (currentIndex === index) {
             imgElement.classList.remove('loading');
-            // HIDE SPINNER
             if (spinner) spinner.classList.add('hidden');
         }
     };
@@ -1104,13 +1177,26 @@ function loadLightboxImage(index) {
         highResImg.onerror = handleError;
     }
 
-    // 5. Preload adjacent images
     preloadAdjacentImages(index);
 }
 
 
-
-
+// Optional JS helper if mobile browsers ignore the `download` attribute
+function forceDownloadImage(url, filename) {
+    fetch(url)
+        .then(res => res.blob())
+        .then(blob => {
+            const blobUrl = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = blobUrl;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(blobUrl);
+        })
+        .catch(err => console.error("Download failed:", err));
+}
 
 // 🔮 Preload next and previous high-res images
 function preloadAdjacentImages(index) {
@@ -1215,86 +1301,58 @@ async function bootAppWithVanityRouting() {
 bootAppWithVanityRouting();
 
 
-// ==========================================
-// 📱 TOUCH & SWIPE NAVIGATION LOGIC
-// ==========================================
-
-let touchStartX = 0;
-let touchStartY = 0;
-let touchEndX = 0;
-let touchEndY = 0;
-
-// Minimum horizontal distance (in pixels) to trigger a swipe
-const minSwipeDistance = 50; 
-// Maximum vertical threshold to prevent triggering swipe when scrolling vertically
-const maxVerticalTolerance = 80; 
-
+// Scale state tracking
+let currentScale = 1;
+let lastTapTime = 0;
+const doubleTapDelay = 300;
 
 function initTouchEvents() {
-    const modal = document.getElementById('modal-container');
-    if (!modal) return;
+    const imgElement = document.getElementById('modal-img');
+    if (!imgElement) return;
 
-    modal.addEventListener('touchstart', handleTouchStart, { passive: true });
-    // Set passive: false so e.preventDefault() works cleanly on touchmove
-    modal.addEventListener('touchmove', handleTouchMove, { passive: false });
-    modal.addEventListener('touchend', handleTouchEnd, { passive: true });
+    // Optional: Keep ONLY Double-Tap Zoom on the image
+    imgElement.addEventListener('touchend', handleImageDoubleTap);
 }
 
+function handleImageDoubleTap(e) {
+    const currentTime = new Date().getTime();
+    const tapLength = currentTime - lastTapTime;
 
-function handleTouchStart(e) {
-    // Record initial touch coordinates
-    touchStartX = e.changedTouches[0].screenX;
-    touchStartY = e.changedTouches[0].screenY;
-}
-
-
-function handleTouchMove(e) {
-    // Prevent the default browser behavior (prevents background scroll & pull-to-refresh)
-    if (e.cancelable) {
+    if (tapLength < doubleTapDelay && tapLength > 0) {
         e.preventDefault();
-    }
+        const imgElement = document.getElementById('modal-img');
+        if (!imgElement) return;
 
-    touchEndX = e.changedTouches[0].screenX;
-    touchEndY = e.changedTouches[0].screenY;
-}
-
-function handleTouchEnd(e) {
-    touchEndX = e.changedTouches[0].screenX;
-    touchEndY = e.changedTouches[0].screenY;
-
-    handleSwipeGesture();
-}
-
-function handleSwipeGesture() {
-    const deltaX = touchEndX - touchStartX;
-    const deltaY = touchEndY - touchStartY;
-
-    if (Math.abs(deltaY) > maxVerticalTolerance) return;
-
-    if (Math.abs(deltaX) >= minSwipeDistance) {
-        if (deltaX < 0) {
-            // Swiped Left 👈 -> Slide to Next
-            nextImage();
+        if (currentScale > 1.05) {
+            resetPanZoom();
         } else {
-            // Swiped Right 👉 -> Slide to Previous
-            prevImage();
-        }
-    }
-}
+            const touch = e.changedTouches[0];
+            const rect = imgElement.getBoundingClientRect();
+            const offsetX = (touch.clientX - rect.left) / rect.width;
+            const offsetY = (touch.clientY - rect.top) / rect.height;
 
-// Ensure listeners are initialized when DOM is ready
-document.addEventListener('DOMContentLoaded', initTouchEvents);
+            currentScale = 2.5;
+            imgElement.style.transition = 'transform 0.25s ease-out';
+            imgElement.style.transformOrigin = `${offsetX * 100}% ${offsetY * 100}%`;
+            imgElement.style.transform = `scale(${currentScale})`;
+        }
+        lastTapTime = 0;
+        return;
+    }
+    lastTapTime = currentTime;
+}
 
 function resetPanZoom() {
     const imgElement = document.getElementById('modal-img');
     if (!imgElement) return;
 
-    // Reset inline CSS transforms
+    currentScale = 1;
+    imgElement.style.transition = 'none';
     imgElement.style.transform = 'none';
     imgElement.style.transformOrigin = 'center center';
-
-    // Reset custom tracking variables if you are keeping state manually
-    if (typeof currentScale !== 'undefined') currentScale = 1;
-    if (typeof currentPanX !== 'undefined') currentPanX = 0;
-    if (typeof currentPanY !== 'undefined') currentPanY = 0;
 }
+
+
+
+
+document.addEventListener('DOMContentLoaded', initTouchEvents);
