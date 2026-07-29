@@ -623,3 +623,68 @@ body.modal-open {
         background: rgba(0, 0, 0, 0.5);
     }
 }
+
+
+
+
+/* Base style shared by both img and video */
+.lightbox-media {
+    max-width: 100%;
+    max-height: 85vh;
+    object-fit: contain;
+    border-radius: 4px;
+    user-select: none;
+    -webkit-user-drag: none;
+
+}
+
+/* Ensure thumbnail card wrapper can position child overlays */
+.thumbnail-wrapper {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    border-radius: 8px;
+    background-color: var(--bg-card-placeholder, #1a1a1a);
+}
+
+.thumbnail-wrapper img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+/* 🎬 Video Badge Overlay */
+.video-badge {
+    position: absolute;
+    bottom: 8px;
+    left: 8px;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    background: rgba(0, 0, 0, 0.65);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    border-radius: 12px;
+    color: #ffffff;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    pointer-events: none; /* Allows taps to pass through directly to open the lightbox */
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+}
+
+/* Play SVG Icon styling */
+.video-badge svg {
+    display: block;
+    fill: #ffffff;
+}
+
+
+.hidden {
+    display: none !important;
+}

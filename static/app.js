@@ -367,9 +367,20 @@ function createCardElement(name, imgIndex) {
         ? `<div class="image-album-badge">📂 ${albumName}</div>`
         : '';
 
+    // 🎬 Video play badge overlay (Rendered only for video files)
+    const videoBadgeHtml = isVideoFile(name)
+        ? `<div class="video-badge" title="Video File">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                <polygon points="5 3 19 12 5 21 5 3"></polygon>
+            </svg>
+            <span>VIDEO</span>
+           </div>`
+        : '';
+
     card.innerHTML = `
-        <div class="thumb-container">
+        <div class="thumb-container" style="position: relative;">
             ${albumBadgeHtml}
+            ${videoBadgeHtml}
             <img src=""
                  data-src="/thumb/${thumbFilename}"
                  alt="Gallery Preview Thumbnail"
@@ -1117,8 +1128,19 @@ async function downloadCurrentLightboxImage() {
 // 🎯 Fast Image Loading with Instant Thumbnail & Abort Control
 
 // 2. Updated loadLightboxImage function
+// Helper to detect video extensions
+function isVideoFile(filename) {
+    if (!filename) return false;
+    const ext = filename.split('.').pop().toLowerCase();
+    return ['mp4', 'webm', 'mov', 'mkv', 'avi'].includes(ext);
+}
+
+// Update the function where gallery items are created
+
+
 function loadLightboxImage(index) {
     const imgElement = document.getElementById('modal-img');
+    const videoElement = document.getElementById('modal-video');
     const spinner = document.getElementById('lightbox-spinner');
     const downloadBtn = document.getElementById('lightbox-download-btn');
     const filename = allImages[index];
@@ -1146,39 +1168,83 @@ function loadLightboxImage(index) {
     const thumbUrl = `/thumb/${cleanStem}.jpg`;
     const fullResUrl = `/images/${filename}`;
 
-    // RAM Cleanup
-    imgElement.src = '';
-    imgElement.classList.add('loading');
-    imgElement.src = thumbUrl; 
-
-    // Decode full-res image
-    const highResImg = new Image();
-    highResImg.src = fullResUrl;
-
-    const handleSuccess = () => {
-        if (currentIndex === index) {
-            imgElement.src = fullResUrl;
-            imgElement.classList.remove('loading');
-            if (spinner) spinner.classList.add('hidden');
+    // 🎬 2. VIDEO HANDLING BRANCH
+    if (isVideoFile(filename)) {
+        // Hide image viewport and purge image RAM buffer
+        if (imgElement) {
+            imgElement.classList.add('hidden');
+            imgElement.src = '';
         }
-    };
 
-    const handleError = () => {
-        if (currentIndex === index) {
-            imgElement.classList.remove('loading');
-            if (spinner) spinner.classList.add('hidden');
+        if (videoElement) {
+            videoElement.classList.remove('hidden');
+            videoElement.pause();
+            videoElement.src = fullResUrl;
+            videoElement.load(); // Force video decoder buffer initialization
+
+            videoElement.onloadeddata = () => {
+                if (currentIndex === index && spinner) {
+                    spinner.classList.add('hidden');
+                }
+            };
+
+            videoElement.onerror = () => {
+                if (currentIndex === index && spinner) {
+                    spinner.classList.add('hidden');
+                }
+            };
         }
-    };
 
-    if ('decode' in highResImg) {
-        highResImg.decode().then(handleSuccess).catch(handleError);
-    } else {
-        highResImg.onload = handleSuccess;
-        highResImg.onerror = handleError;
+        // Preload adjacent items (videos or images)
+        preloadAdjacentImages(index);
+        return;
+    }
+
+    // 🖼️ 3. IMAGE HANDLING BRANCH (Existing RAM-efficient workflow)
+    if (videoElement) {
+        videoElement.pause();
+        videoElement.classList.add('hidden');
+        videoElement.src = ''; // Clear video buffer from mobile RAM
+    }
+
+    if (imgElement) {
+        imgElement.classList.remove('hidden');
+
+        // Clear RAM buffer & set immediate low-res thumbnail preview
+        imgElement.src = '';
+        imgElement.classList.add('loading');
+        imgElement.src = thumbUrl; 
+
+        // Decode full-res image in background
+        const highResImg = new Image();
+        highResImg.src = fullResUrl;
+
+        const handleSuccess = () => {
+            if (currentIndex === index) {
+                imgElement.src = fullResUrl;
+                imgElement.classList.remove('loading');
+                if (spinner) spinner.classList.add('hidden');
+            }
+        };
+
+        const handleError = () => {
+            if (currentIndex === index) {
+                imgElement.classList.remove('loading');
+                if (spinner) spinner.classList.add('hidden');
+            }
+        };
+
+        if ('decode' in highResImg) {
+            highResImg.decode().then(handleSuccess).catch(handleError);
+        } else {
+            highResImg.onload = handleSuccess;
+            highResImg.onerror = handleError;
+        }
     }
 
     preloadAdjacentImages(index);
 }
+
 
 
 // Optional JS helper if mobile browsers ignore the `download` attribute

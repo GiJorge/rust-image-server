@@ -12,6 +12,7 @@ use axum::{
 
 
 
+use std::process::Command;
 
 use std::sync::Arc;
 use serde::{Deserialize, Serialize};
@@ -319,6 +320,8 @@ async fn main() {
 }
 
 
+
+
 async fn upload_image(
     State(state): State<AppState>,
     mut multipart: Multipart,
@@ -355,7 +358,7 @@ async fn upload_image(
     }
 
     if files.is_empty() {
-        return (StatusCode::BAD_REQUEST, "No image files provided").into_response();
+        return (StatusCode::BAD_REQUEST, "No files provided").into_response();
     }
 
     let clean_album = album_tag.unwrap_or_default();
@@ -395,19 +398,56 @@ async fn upload_image(
             
             let thumb_path = PathBuf::from(&state_clone.thumbnails_dir).join(format!("{}.jpg", clean_stem));
             
-            let img_path_clone = save_path.clone();
+            let media_path_clone = save_path.clone();
             let semaphore = state_clone.cpu_semaphore.clone();
 
-            // Perform CPU-heavy thumbnail extraction in background thread pool
-            tokio::task::spawn_blocking(move || {
-                let _permit = semaphore.try_acquire();
-                generate_oriented_thumbnail(&img_path_clone, &thumb_path);
-            }).await.ok();
+            // 💡 Check file extension to detect video vs image
+            let ext = unique_filename
+                .rsplit('.')
+                .next()
+                .unwrap_or("")
+                .to_lowercase();
+                
+            let is_video = matches!(ext.as_str(), "mp4" | "webm" | "mov" | "mkv" | "avi");
 
-            // Insert into SQLite database
-            let insert_res = sqlx::query(
-                "INSERT INTO images (filename, created_at, file_size) VALUES (?, ?, ?);"
-            )
+            // 💡 FIX: Clone unique_filename specifically for use inside the closure
+let filename_for_log = unique_filename.clone();
+
+            // Perform thumbnail extraction in background thread pool
+          
+            // Perform thumbnail extraction in background thread pool
+tokio::task::spawn_blocking(move || {
+    let _permit = semaphore.try_acquire();
+    
+    if is_video {
+        // 🎬 Extract frame at 1 sec mark using FFmpeg
+        let status = Command::new("ffmpeg")
+            .args(&[
+                "-ss", "00:00:01",
+                "-i", media_path_clone.to_str().unwrap_or_default(),
+                "-vframes", "1",
+                "-vf", "scale=400:-1",
+                "-q:v", "3",
+                "-y",
+                thumb_path.to_str().unwrap_or_default(),
+            ])
+            .status();
+
+        if status.is_err() || !status.unwrap().success() {
+            // 💡 Uses filename_for_log moved into closure
+            eprintln!("⚠️ FFmpeg thumbnail extraction failed for {}", filename_for_log);
+        }
+    } else {
+        // 🖼️ Standard Image Thumbnail Extraction
+        generate_oriented_thumbnail(&media_path_clone, &thumb_path);
+    }
+}).await.ok();
+
+// 💡 `unique_filename` remains untouched and valid for your SQLite insert & WS broadcast below!
+let insert_res = sqlx::query(
+    "INSERT INTO images (filename, created_at, file_size) VALUES (?, ?, ?);"
+)
+
             .bind(&unique_filename)
             .bind(timestamp)
             .bind(file_size)
@@ -437,7 +477,7 @@ async fn upload_image(
                     }
                 }
 
-                // 📡 Broadcast live update over WebSocket as EACH image finishes
+                // 📡 Broadcast live update over WebSocket as EACH media item finishes
                 let response_payload = UploadResponse {
                     action: "upload".to_string(),
                     filename: unique_filename,
@@ -452,8 +492,6 @@ async fn upload_image(
     // ⚡ Return IMMEDIATELY to the user interface
     (StatusCode::OK, Json(serde_json::json!({ "status": "queued" }))).into_response()
 }
-
-
 
 
 

@@ -15,7 +15,8 @@
 <body>
     <button id="theme-toggle" onclick="toggleTheme()">🌓</button>
     <button id="upload-fab" onclick="triggerUploadCheck()">+</button>
-    <input type="file" id="file-input" style="display: none" accept="image/*" onchange="handleUpload(this)">
+    <!-- 🆕 Updated accept attribute to allow both images and videos -->
+    <input type="file" id="file-input" style="display: none" accept="image/*,video/*" onchange="handleUpload(this)">
 
     <div id="loading-overlay">
         <div class="spinner"></div>
@@ -53,8 +54,8 @@
         <select id="upload-select-existing" onchange="toggleNewAlbumInputField(this)"></select>
         <input type="text" id="upload-new-album-input" placeholder="Type new album folder name..." style="display: none; margin-top: 10px; width: 100%; padding: 8px; box-sizing: border-box;">
         
-        <!-- 🆕 Hidden File Input configured with the 'multiple' attribute and image mime filter -->
-        <input type="file" id="file-upload-input" accept="image/*" multiple style="display: none;" onchange="handleUpload(this)">
+        <!-- 🆕 Hidden File Input configured with image + video mime filter -->
+        <input type="file" id="file-upload-input" accept="image/*,video/*" multiple style="display: none;" onchange="handleUpload(this)">
 
         <div class="modal-buttons">
             <button class="btn-action btn-action-submit" onclick="submitUploadAlbumModal()">Continue</button>
@@ -100,71 +101,80 @@
     <div id="modal-container" onclick="closeModalTarget(event)">
         <span class="close-btn" onclick="closeModal()">&times;</span>
         <!-- 🔢 Top Counter Badge -->
-  
-    <div id="lightbox-counter" class="lightbox-counter">1 </div>
+        <div id="lightbox-counter" class="lightbox-counter">1</div>
 
-  
-    
-</button>
-     <!-- 💡 Floating Side Tap Targets for Mobile Navigation -->
-    <button class="nav-tap-zone nav-prev" onclick="prevImage()" title="Previous Image">
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="15 18 9 12 15 6"></polyline>
-        </svg>
-    </button>
+        <!-- 💡 Floating Side Tap Targets for Mobile Navigation -->
+        <button class="nav-tap-zone nav-prev" onclick="prevImage()" title="Previous Image">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="15 18 9 12 15 6"></polyline>
+            </svg>
+        </button>
 
-    <button class="nav-tap-zone nav-next" onclick="nextImage()" title="Next Image">
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="9 18 15 12 9 6"></polyline>
-        </svg>
-    </button>
+        <button class="nav-tap-zone nav-next" onclick="nextImage()" title="Next Image">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="9 18 15 12 9 6"></polyline>
+            </svg>
+        </button>
+            
+        <div style="position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); display: flex; gap: 12px; z-index: 10015;">
+            <!-- Delete Button -->
+            <button id="delete-btn" onclick="triggerDeleteCheck(event)" style="background: #ff4d4d; color: white; border: none; font-size: 16px; padding: 10px 20px; border-radius: 20px; cursor: pointer; font-weight: bold; box-shadow: 0 4px 10px rgba(0,0,0,0.3); display: inline-flex; align-items: center; justify-content: center;" title="Delete File">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="3 6 5 6 21 6"></polyline>
+                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                    <line x1="10" y1="11" x2="10" y2="17"></line>
+                    <line x1="14" y1="11" x2="14" y2="17"></line>
+                </svg>
+            </button>
+
+            <!-- Download Button -->
+            <button id="down-btn" onclick="downloadCurrentLightboxImage()" style="background: #237750; color: white; border: none; font-size: 16px; padding: 10px 20px; border-radius: 20px; cursor: pointer; font-weight: bold; box-shadow: 0 4px 10px rgba(0,0,0,0.3); display: inline-flex; align-items: center; justify-content: center;" title="Download File">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="7 10 12 15 17 10"></polyline>
+                    <line x1="12" y1="15" x2="12" y2="3"></line>
+                </svg>
+            </button>
         
-      <div style="position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); display: flex; gap: 12px; z-index: 10015;">
-    <!-- Delete Button -->
-    <button id="delete-btn" onclick="triggerDeleteCheck(event)" style="background: #ff4d4d; color: white; border: none; font-size: 16px; padding: 10px 20px; border-radius: 20px; cursor: pointer; font-weight: bold; box-shadow: 0 4px 10px rgba(0,0,0,0.3); display: inline-flex; align-items: center; justify-content: center;" title="Delete Image">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="3 6 5 6 21 6"></polyline>
-            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-            <line x1="10" y1="11" x2="10" y2="17"></line>
-            <line x1="14" y1="11" x2="14" y2="17"></line>
-        </svg>
-    </button>
-
-    <!-- Download Button -->
-    <button id="down-btn" onclick="downloadCurrentLightboxImage()" style="background: #237750; color: white; border: none; font-size: 16px; padding: 10px 20px; border-radius: 20px; cursor: pointer; font-weight: bold; box-shadow: 0 4px 10px rgba(0,0,0,0.3); display: inline-flex; align-items: center; justify-content: center;" title="Download Image">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-            <polyline points="7 10 12 15 17 10"></polyline>
-            <line x1="12" y1="15" x2="12" y2="3"></line>
-        </svg>
-    </button>
-   
-    <!-- Set Album Button -->
-    <button id="set-album-btn" onclick="triggerExistingAlbumAssign(event)" style="background: #4da6ff; color: white; border: none; font-size: 16px; padding: 10px 20px; border-radius: 20px; cursor: pointer; font-weight: bold; box-shadow: 0 4px 10px rgba(0,0,0,0.3); display: inline-flex; align-items: center; justify-content: center;" title="Assign to Album">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
-        </svg>
-    </button>
-</div>
+            <!-- Set Album Button -->
+            <button id="set-album-btn" onclick="triggerExistingAlbumAssign(event)" style="background: #4da6ff; color: white; border: none; font-size: 16px; padding: 10px 20px; border-radius: 20px; cursor: pointer; font-weight: bold; box-shadow: 0 4px 10px rgba(0,0,0,0.3); display: inline-flex; align-items: center; justify-content: center;" title="Assign to Album">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                </svg>
+            </button>
+        </div>
 
         <div class="panzoom-wrapper">
             <!-- CSS Loading Spinner -->
-    <div id="lightbox-spinner" class="spinner hidden"></div>
-            <img id="modal-img" src="" alt="">
+            <div id="lightbox-spinner" class="spinner hidden"></div>
+
+            <!-- 🖼️ Image Viewport -->
+            <img id="modal-img" src="" alt="" class="hidden">
+
+            <!-- 🎬 NEW: Video Viewport (Mobile Low-RAM Optimized) -->
+            <video 
+                id="modal-video" 
+                class="hidden" 
+                controls 
+                playsinline 
+                webkit-playsinline
+                preload="metadata"
+                controlsList="nodownload noplaybackrate"
+                disablePictureInPicture
+                style="max-width: 100%; max-height: 85vh; border-radius: 4px; object-fit: contain;"
+            ></video>
         </div>
     </div>
 
-
-
     <!-- Floating Upload Progress Bar -->
-<div id="upload-progress-container" class="upload-progress-container">
-    <div class="upload-progress-header">
-        <span id="upload-progress-text">Uploading images...</span>
-        <span id="upload-progress-percent">0%</span>
+    <div id="upload-progress-container" class="upload-progress-container">
+        <div class="upload-progress-header">
+            <span id="upload-progress-text">Uploading files...</span>
+            <span id="upload-progress-percent">0%</span>
+        </div>
+        <div class="upload-progress-bar-bg">
+            <div id="upload-progress-bar-fill" class="upload-progress-bar-fill"></div>
+        </div>
     </div>
-    <div class="upload-progress-bar-bg">
-        <div id="upload-progress-bar-fill" class="upload-progress-bar-fill"></div>
-    </div>
-</div>
 </body>
 </html>
