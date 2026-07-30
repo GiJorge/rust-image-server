@@ -2,17 +2,15 @@ use axum::{
     extract::{DefaultBodyLimit, Multipart, Path, Query, State},
     extract::ws::{WebSocket, WebSocketUpgrade},
     http::{header, StatusCode},
-    response::{Html, IntoResponse, Json},
+    response::{Html, IntoResponse, Json}, // 👈 Removed Response
     routing::{get, post},
     Router,
-    
-    
 };
 
+use serde_json::json; // 👈 Removed Value
 
-
-
-use std::process::Command;
+use std::process::{Command, Stdio};
+use tokio::io::AsyncWriteExt;
 
 use std::sync::Arc;
 use serde::{Deserialize, Serialize};
@@ -25,9 +23,6 @@ use tower::ServiceBuilder;
 use sqlx::{SqlitePool, Row};
 
 use tokio::sync::{broadcast, Semaphore};
-
-
-
 
 
 
@@ -119,7 +114,6 @@ async fn favicon_handler() -> impl IntoResponse {
 
 #[tokio::main]
 async fn main() {
-  
     dotenvy::dotenv().ok();
 
     let port: u16 = std::env::var("PORT")
@@ -132,23 +126,27 @@ async fn main() {
     let (images_dir, thumbnails_dir) = if is_termux {
         (
             "/data/data/com.termux/files/home/images".to_string(),
-            "/data/data/com.termux/files/home/thumb".to_string()
+            "/data/data/com.termux/files/home/thumb".to_string(),
         )
     } else {
         (
             std::env::var("IMAGES_DIR").unwrap_or_else(|_| "./images".to_string()),
-            std::env::var("THUMBNAILS_DIR").unwrap_or_else(|_| "./thumb".to_string())
+            std::env::var("THUMBNAILS_DIR").unwrap_or_else(|_| "./thumb".to_string()),
         )
     };
 
-    // 🎯 FIX: Instead of hardcoding "sqlite://gallery.db", dynamically pick the path based on environment
+    // Ensure storage directories exist on disk
+    let _ = fs::create_dir_all(&images_dir);
+    let _ = fs::create_dir_all(&thumbnails_dir);
+
+    // Pick DB path based on Termux environment
     let db_url = if is_termux {
         "sqlite:///data/data/com.termux/files/home/gallery.db".to_string()
     } else {
         std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite://gallery.db".to_string())
     };
 
-    // 🛠️ SAFETY CHECK: Strip the protocol and touch the file if it's completely missing
+    // Touch file if missing
     if let Some(clean_path) = db_url.strip_prefix("sqlite://") {
         let db_path = std::path::Path::new(clean_path);
         if !db_path.exists() {
@@ -162,7 +160,6 @@ async fn main() {
 
     println!("Connecting to database string: {}", db_url);
 
-    // 🚀 Now connect using our dynamic db_url variable instead of the hardcoded literal
     let db = SqlitePool::connect(&db_url)
         .await
         .expect("Failed to connect to SQLite");
@@ -203,90 +200,102 @@ async fn main() {
     .await
     .expect("Failed to initialize image_albums structural mapping table");
 
+   
+   // --- 📂 STARTUP STORAGE SYNCHRONIZATION LOOP ---
+println!("Scanning image directory for untracked filesystem assets...");
+if let Ok(entries) = fs::read_dir(&images_dir) {
+    for entry in entries.flatten() {
+        let path = entry.path();
+        
+        if path.is_file() {
+            if let Some(filename_os) = path.file_name() {
+                let filename = filename_os.to_string_lossy().into_owned();
+                
+                if filename.starts_with('.') { continue; }
 
+                // 1. Verify if this file already exists in our database registry
+                let exists_row = sqlx::query("SELECT 1 FROM images WHERE filename = ? LIMIT 1;")
+                    .bind(&filename)
+                    .fetch_optional(&db)
+                    .await;
 
-  
-    // --- 📂 STARTUP STORAGE SYNCHRONIZATION LOOP ---
-    println!("Scanning image directory for untracked filesystem assets...");
-    if let Ok(entries) = fs::read_dir(&images_dir) { // 🎯 Fixed variable name to match your code
-        for entry in entries.flatten() {
-            let path = entry.path();
-            
-            if path.is_file() {
-                if let Some(filename_os) = path.file_name() {
-                    let filename = filename_os.to_string_lossy().into_owned();
+                if let Ok(None) = exists_row {
+                    println!("Found untracked file: {}. Cataloging and generating thumbnail...", filename);
                     
-                    if filename.starts_with('.') { continue; }
+                    // 2. Read physical metadata sizes
+                    let file_size = fs::metadata(&path).map(|m| m.len() as i64).unwrap_or(0);
+                    
+                    let created_at = fs::metadata(&path)
+                        .and_then(|m| m.created())
+                        .map(|t| t.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64)
+                        .unwrap_or_else(|_| {
+                            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64
+                        });
 
-                    // 1. Verify if this file already exists in our database registry
-                    let exists_row = sqlx::query("SELECT 1 FROM images WHERE filename = ? LIMIT 1;")
-                        .bind(&filename)
-                        .fetch_optional(&db)
-                        .await;
+                    // 💡 3. GENERATE MISSING THUMBNAIL ON STARTUP
+                    let clean_stem = filename
+                        .rfind('.')
+                        .map(|p| &filename[..p])
+                        .unwrap_or(&filename);
+                    
+                    let thumb_path = PathBuf::from(&thumbnails_dir).join(format!("{}.jpg", clean_stem));
 
-                    if let Ok(None) = exists_row {
-                        println!("Found untracked file: {}. Cataloging to database...", filename);
-                        
-                        // 2. Read physical metadata sizes safely
-                        let file_size = fs::metadata(&path).map(|m| m.len() as i64).unwrap_or(0);
-                        
-                        // 3. Fallback timestamp sequence tracking
-                        let created_at = fs::metadata(&path)
-                            .and_then(|m| m.created())
-                            .map(|t| t.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64)
-                            .unwrap_or_else(|_| {
-                                SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64
-                            });
+                    if !thumb_path.exists() {
+                        let ext = filename.rsplit('.').next().unwrap_or("").to_lowercase();
+                        let is_video = matches!(ext.as_str(), "mp4" | "webm" | "mov" | "mkv" | "avi");
 
-                        // 4. Register the asset row into the database layout
-                        let _ = sqlx::query(
-                            "INSERT INTO images (filename, created_at, file_size) VALUES (?, ?, ?);"
-                        )
-                        .bind(&filename)
-                        .bind(created_at)
-                        .bind(file_size)
-                        .execute(&db)
-                        .await;
+                        if is_video {
+                            // 🎬 Run FFmpeg to extract video thumbnail frame
+                            let _ = Command::new("ffmpeg")
+                                .args(&[
+                                    "-y",
+                                    "-ss", "00:00:00",
+                                    "-i", path.to_str().unwrap_or_default(),
+                                    "-vframes", "1",
+                                    "-vf", "scale=400:-1",
+                                    "-update", "1",
+                                    "-loglevel", "error",
+                                    thumb_path.to_str().unwrap_or_default(),
+                                ])
+                                .stdout(Stdio::null())
+                                .stderr(Stdio::null())
+                                .status();
+                        } else {
+                            generate_oriented_thumbnail(&path, &thumb_path);
+                        }
                     }
+
+                    // 4. Register the asset row into database
+                    let _ = sqlx::query(
+                        "INSERT INTO images (filename, created_at, file_size) VALUES (?, ?, ?);"
+                    )
+                    .bind(&filename)
+                    .bind(created_at)
+                    .bind(file_size)
+                    .execute(&db)
+                    .await;
                 }
             }
         }
     }
-    println!("Filesystem sync check complete!");
+}
+println!("Filesystem sync check complete!");
 
-
-    
-
-    let db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite://gallery.db".to_string());
-
-    let _ = fs::create_dir_all(&images_dir);
-    let _ = fs::create_dir_all(&thumbnails_dir);
-
-    let db_filename = db_url.replace("sqlite://", "");
-    let db_pool = SqlitePool::connect_with(
-        sqlx::sqlite::SqliteConnectOptions::new()
-            .filename(&db_filename)
-            .create_if_missing(true)
-    )
-    .await
-    .unwrap();
 
     let master_password = std::env::var("MASTER_PASSWORD").unwrap_or_else(|_| "@jo111".to_string());
     let (tx, _rx) = broadcast::channel(16);
     
     let index_html_content = include_str!("../static/index.html");
-    
     let style_css_content = include_str!("../static/style.css");
     let app_js_content = include_str!("../static/app.js");
 
     let state = AppState {
-        db: db_pool,
+        db, // 💡 USE THE ALREADY INITIALIZED DB CONNECTION POOL HERE!
         images_dir,
         thumbnails_dir,
         tx,
         master_password,
-        // 🎯 Restrict CPU image processing to 2 concurrent worker tasks
-    cpu_semaphore: Arc::new(Semaphore::new(2)),
+        cpu_semaphore: Arc::new(Semaphore::new(2)),
     };
 
     let app = Router::new()
@@ -300,25 +309,26 @@ async fn main() {
         }))
         .route("/api/albums", get(get_albums_list))
         .route("/api/images", get(get_images_json))
-        .route("/api/upload", post(upload_image))
-        // Registering the custom assign album post routing endpoint
+        .route(
+            "/api/upload", 
+            post(upload_image).layer(DefaultBodyLimit::max(200 * 1024 * 1024))
+        )
         .route("/api/images/assign_album", post(assign_album_to_existing_image))
+        .route("/api/scan", post(trigger_scan_handler))
         .route("/api/ws", get(ws_handler))
         .route("/thumb/:filename", get(get_thumbnail))
         .route("/api/delete", post(delete_image))
         .nest_service("/images", ServeDir::new(&state.images_dir))
         .route("/api/images/manifest", get(get_image_manifest))
-       
-      .route("/:album_name", get(vanity_album_index))
+        .route("/:album_name", get(vanity_album_index))
         .with_state(state)
-        .layer(ServiceBuilder::new().layer(DefaultBodyLimit::max(50 * 1024 * 1024)));
+        .layer(ServiceBuilder::new().layer(DefaultBodyLimit::max(200 * 1024 * 1024)));
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-     println!("Server running on http://{}", addr);
+    println!("Server running on http://{}", addr);
     axum::serve(listener, app).await.unwrap();
 }
-
 
 
 
@@ -326,16 +336,18 @@ async fn upload_image(
     State(state): State<AppState>,
     mut multipart: Multipart,
 ) -> impl IntoResponse {
-    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
     let mut password_provided = String::new();
     let mut album_tag: Option<String> = None;
+    let mut queued_files = Vec::new();
 
-    // Parse incoming multipart data
+    // 🚀 Stream chunks directly to disk (Zero in-memory buffering)
     while let Ok(Some(field)) = multipart.next_field().await {
         let name = field.name().unwrap_or("").to_string();
         match name.as_str() {
             "password" => {
-                if let Ok(text) = field.text().await { password_provided = text; }
+                if let Ok(text) = field.text().await { 
+                    password_provided = text; 
+                }
             }
             "album" => {
                 if let Ok(text) = field.text().await {
@@ -343,10 +355,34 @@ async fn upload_image(
                     if !text_val.is_empty() { album_tag = Some(text_val); }
                 }
             }
-            "image" | "images" | "files" => {
-                let filename = field.file_name().unwrap_or("uploaded.jpg").to_string();
-                if let Ok(bytes) = field.bytes().await {
-                    if !bytes.is_empty() { files.push((filename, bytes.to_vec())); }
+            "image" | "images" | "files" | "file" => {
+                let filename = field.file_name().unwrap_or("uploaded.bin").to_string();
+                if filename.is_empty() { continue; }
+
+                let timestamp = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs() as i64;
+
+                let unique_filename = format!("{}_{}", timestamp, filename);
+                let save_path = PathBuf::from(&state.images_dir).join(&unique_filename);
+
+                // Stream field payload directly to file
+                if let Ok(mut file) = tokio::fs::File::create(&save_path).await {
+                    let mut file_size: i64 = 0;
+                    let mut field = field; // mutable handle for chunk iteration
+
+                    while let Ok(Some(chunk)) = field.chunk().await {
+                        if file.write_all(&chunk).await.is_ok() {
+                            file_size += chunk.len() as i64;
+                        } else {
+                            break;
+                        }
+                    }
+
+                    if file_size > 0 {
+                        queued_files.push((unique_filename, save_path, file_size));
+                    }
                 }
             }
             _ => {}
@@ -357,139 +393,158 @@ async fn upload_image(
         return (StatusCode::UNAUTHORIZED, "Incorrect master password").into_response();
     }
 
-    if files.is_empty() {
-        return (StatusCode::BAD_REQUEST, "No files provided").into_response();
+    if queued_files.is_empty() {
+        return (StatusCode::BAD_REQUEST, "No files provided or upload failed").into_response();
     }
 
     let clean_album = album_tag.unwrap_or_default();
 
-    // 🚀 Fast-path: Save raw files to disk instantly
-    let mut queued_files = Vec::new();
+    // 🎯 Spawn background thumbnail & database task
+    let state_clone = state.clone();
+    let album_clone = clean_album.clone();
 
-    for (filename, file_data) in files {
+  
+    tokio::spawn(async move {
+    for (unique_filename, save_path, file_size) in queued_files {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs() as i64;
 
-        let unique_filename = format!("{}_{}", timestamp, filename);
-        let save_path = PathBuf::from(&state.images_dir).join(&unique_filename);
+        let clean_stem = unique_filename
+            .rfind('.')
+            .map(|p| unique_filename[..p].to_string())
+            .unwrap_or_else(|| unique_filename.clone());
+        
+        let thumb_path = PathBuf::from(&state_clone.thumbnails_dir).join(format!("{}.jpg", clean_stem));
+        let semaphore = state_clone.cpu_semaphore.clone();
 
-        if fs::write(&save_path, &file_data).is_ok() {
-            queued_files.push((unique_filename, save_path, file_data.len() as i64));
-        }
-    }
-
-    // 🎯 Spawn background processing task (doesn't block the HTTP response)
-    let state_clone = state.clone();
-    let album_clone = clean_album.clone();
-
-    tokio::spawn(async move {
-        for (unique_filename, save_path, file_size) in queued_files {
-            let timestamp = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs() as i64;
-
-            let clean_stem = unique_filename
-                .rfind('.')
-                .map(|p| &unique_filename[..p])
-                .unwrap_or(&unique_filename);
+        let ext = unique_filename
+            .rsplit('.')
+            .next()
+            .unwrap_or("")
+            .to_lowercase();
             
-            let thumb_path = PathBuf::from(&state_clone.thumbnails_dir).join(format!("{}.jpg", clean_stem));
+        let is_video = matches!(ext.as_str(), "mp4" | "webm" | "mov" | "mkv" | "avi");
+        let filename_for_log = unique_filename.clone();
+        let images_dir_clone = state_clone.images_dir.clone();
+
+        let mut final_media_filename = unique_filename.clone();
+
+        let task_result = tokio::task::spawn_blocking(move || {
+            let _permit = semaphore.try_acquire();
             
-            let media_path_clone = save_path.clone();
-            let semaphore = state_clone.cpu_semaphore.clone();
+            if is_video {
+                // 🎬 Extract Thumbnail Frame
+                let status = Command::new("ffmpeg")
+                    .args(&[
+                        "-y",
+                        "-ss", "00:00:00",
+                        "-i", save_path.to_str().unwrap_or_default(),
+                        "-vframes", "1",
+                        "-vf", "scale=400:-1",
+                        "-update", "1",
+                        "-loglevel", "error",
+                        thumb_path.to_str().unwrap_or_default(),
+                    ])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status();
 
-            // 💡 Check file extension to detect video vs image
-            let ext = unique_filename
-                .rsplit('.')
-                .next()
-                .unwrap_or("")
-                .to_lowercase();
-                
-            let is_video = matches!(ext.as_str(), "mp4" | "webm" | "mov" | "mkv" | "avi");
-
-            // 💡 FIX: Clone unique_filename specifically for use inside the closure
-let filename_for_log = unique_filename.clone();
-
-            // Perform thumbnail extraction in background thread pool
-          
-            // Perform thumbnail extraction in background thread pool
-tokio::task::spawn_blocking(move || {
-    let _permit = semaphore.try_acquire();
-    
-    if is_video {
-        // 🎬 Extract frame at 1 sec mark using FFmpeg
-        let status = Command::new("ffmpeg")
-            .args(&[
-                "-ss", "00:00:01",
-                "-i", media_path_clone.to_str().unwrap_or_default(),
-                "-vframes", "1",
-                "-vf", "scale=400:-1",
-                "-q:v", "3",
-                "-y",
-                thumb_path.to_str().unwrap_or_default(),
-            ])
-            .status();
-
-        if status.is_err() || !status.unwrap().success() {
-            // 💡 Uses filename_for_log moved into closure
-            eprintln!("⚠️ FFmpeg thumbnail extraction failed for {}", filename_for_log);
-        }
-    } else {
-        // 🖼️ Standard Image Thumbnail Extraction
-        generate_oriented_thumbnail(&media_path_clone, &thumb_path);
-    }
-}).await.ok();
-
-// 💡 `unique_filename` remains untouched and valid for your SQLite insert & WS broadcast below!
-let insert_res = sqlx::query(
-    "INSERT INTO images (filename, created_at, file_size) VALUES (?, ?, ?);"
-)
-
-            .bind(&unique_filename)
-            .bind(timestamp)
-            .bind(file_size)
-            .execute(&state_clone.db)
-            .await;
-
-            if let Ok(result) = insert_res {
-                let image_id = result.last_insert_rowid();
-
-                if !album_clone.is_empty() {
-                    let _ = sqlx::query("INSERT OR IGNORE INTO albums (name) VALUES (?);")
-                        .bind(&album_clone)
-                        .execute(&state_clone.db)
-                        .await;
-
-                    if let Ok(row) = sqlx::query("SELECT id FROM albums WHERE name = ?;")
-                        .bind(&album_clone)
-                        .fetch_one(&state_clone.db)
-                        .await
-                    {
-                        let album_id: i64 = row.get(0);
-                        let _ = sqlx::query("INSERT OR IGNORE INTO image_albums (image_id, album_id) VALUES (?, ?);")
-                            .bind(image_id)
-                            .bind(album_id)
-                            .execute(&state_clone.db)
-                            .await;
-                    }
+                if status.is_err() || !status.unwrap().success() {
+                    eprintln!("⚠️ FFmpeg thumbnail extraction failed for {}", filename_for_log);
                 }
 
-                // 📡 Broadcast live update over WebSocket as EACH media item finishes
-                let response_payload = UploadResponse {
-                    action: "upload".to_string(),
-                    filename: unique_filename,
-                    album: album_clone.clone(),
-                };
+                // 🎬 Transcode MOV to browser-compatible MP4 (H.264 / YUV420P)
+                if ext == "mov" {
+                    let mp4_filename = format!("{}.mp4", clean_stem);
+                    let target_mp4_path = PathBuf::from(&images_dir_clone).join(&mp4_filename);
 
-                let _ = state_clone.tx.send(response_payload);
+                    let transcode_status = Command::new("ffmpeg")
+                        .args(&[
+                            "-y",
+                            "-i", save_path.to_str().unwrap_or_default(),
+                            "-c:v", "libx264",         // Standard browser H.264
+                            "-pix_fmt", "yuv420p",     // Required for mobile browser decoding
+                            "-preset", "ultrafast",    // Optimization for Termux CPU
+                            "-crf", "26",
+                            "-c:a", "aac",             // Standard AAC audio
+                            "-movflags", "+faststart", // Fast Web start
+                            target_mp4_path.to_str().unwrap_or_default(),
+                        ])
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .status();
+
+                    if let Ok(st) = transcode_status {
+                        if st.success() {
+                            // Delete original raw .mov file
+                            let _ = std::fs::remove_file(&save_path);
+                            return mp4_filename;
+                        }
+                    }
+                    eprintln!("⚠️ FFmpeg transcode failed for MOV, keeping original.");
+                }
+            } else {
+                generate_oriented_thumbnail(&save_path, &thumb_path);
             }
-        }
-    });
 
-    // ⚡ Return IMMEDIATELY to the user interface
+            unique_filename
+        }).await;
+
+        if let Ok(res_name) = task_result {
+            final_media_filename = res_name;
+        }
+
+        // Insert into SQLite database using final filename (.mp4 if converted)
+        let insert_res = sqlx::query(
+            "INSERT INTO images (filename, created_at, file_size) VALUES (?, ?, ?);"
+        )
+        .bind(&final_media_filename)
+        .bind(timestamp)
+        .bind(file_size)
+        .execute(&state_clone.db)
+        .await;
+
+        if let Ok(result) = insert_res {
+            let image_id = result.last_insert_rowid();
+
+            if !album_clone.is_empty() {
+                let _ = sqlx::query("INSERT OR IGNORE INTO albums (name) VALUES (?);")
+                    .bind(&album_clone)
+                    .execute(&state_clone.db)
+                    .await;
+
+                if let Ok(row) = sqlx::query("SELECT id FROM albums WHERE name = ?;")
+                    .bind(&album_clone)
+                    .fetch_one(&state_clone.db)
+                    .await
+                {
+                    let album_id: i64 = row.get(0);
+                    let _ = sqlx::query("INSERT OR IGNORE INTO image_albums (image_id, album_id) VALUES (?, ?);")
+                        .bind(image_id)
+                        .bind(album_id)
+                        .execute(&state_clone.db)
+                        .await;
+                }
+            }
+
+            // Broadcast real-time update over WebSocket
+            let response_payload = UploadResponse {
+                action: "upload".to_string(),
+                filename: final_media_filename,
+                album: album_clone.clone(),
+            };
+
+            let _ = state_clone.tx.send(response_payload);
+        }
+    }
+});
+
+
+
+
+
     (StatusCode::OK, Json(serde_json::json!({ "status": "queued" }))).into_response()
 }
 
@@ -850,4 +905,119 @@ pub async fn get_image_manifest() -> impl IntoResponse {
     println!("📸 [MANIFEST] Found {} total images.", filenames.len());
 
     (StatusCode::OK, Json(filenames))
+}
+
+
+
+async fn scan_untracked_files(state: &AppState) -> Result<usize, String> {
+    let mut added_count = 0;
+    
+    let entries = match std::fs::read_dir(&state.images_dir) {
+        Ok(e) => e,
+        Err(err) => return Err(err.to_string()),
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        
+        if path.is_file() {
+            if let Some(filename_os) = path.file_name() {
+                let filename = filename_os.to_string_lossy().into_owned();
+                
+                if filename.starts_with('.') { continue; }
+
+                // Check DB for existing record
+                let exists_row = sqlx::query("SELECT 1 FROM images WHERE filename = ? LIMIT 1;")
+                    .bind(&filename)
+                    .fetch_optional(&state.db)
+                    .await;
+
+                if let Ok(None) = exists_row {
+                    println!("Found untracked file: {}. Cataloging...", filename);
+                    
+                    let file_size = std::fs::metadata(&path).map(|m| m.len() as i64).unwrap_or(0);
+                    let created_at = std::fs::metadata(&path)
+                        .and_then(|m| m.created())
+                        .map(|t| t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() as i64)
+                        .unwrap_or_else(|_| {
+                            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64
+                        });
+
+                    // Generate thumbnail if missing
+                    let clean_stem = filename
+                        .rfind('.')
+                        .map(|p| &filename[..p])
+                        .unwrap_or(&filename);
+                    
+                    let thumb_path = PathBuf::from(&state.thumbnails_dir).join(format!("{}.jpg", clean_stem));
+
+                    if !thumb_path.exists() {
+                        let ext = filename.rsplit('.').next().unwrap_or("").to_lowercase();
+                        let is_video = matches!(ext.as_str(), "mp4" | "webm" | "mov" | "mkv" | "avi");
+
+                        if is_video {
+                            let _ = Command::new("ffmpeg")
+                                .args(&[
+                                    "-y", "-ss", "00:00:00",
+                                    "-i", path.to_str().unwrap_or_default(),
+                                    "-vframes", "1",
+                                    "-vf", "scale=400:-1",
+                                    "-update", "1",
+                                    "-loglevel", "error",
+                                    thumb_path.to_str().unwrap_or_default(),
+                                ])
+                                .stdout(Stdio::null())
+                                .stderr(Stdio::null())
+                                .status();
+                        } else {
+                            generate_oriented_thumbnail(&path, &thumb_path);
+                        }
+                    }
+
+                    // Insert into DB
+                    let insert_res = sqlx::query(
+                        "INSERT INTO images (filename, created_at, file_size) VALUES (?, ?, ?);"
+                    )
+                    .bind(&filename)
+                    .bind(created_at)
+                    .bind(file_size)
+                    .execute(&state.db)
+                    .await;
+
+                    if insert_res.is_ok() {
+                        added_count += 1;
+                        // Broadcast update so connected frontend clients refresh automatically
+                        let _ = state.tx.send(UploadResponse {
+                            action: "upload".to_string(),
+                            filename: filename.clone(),
+                            album: "".to_string(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+    
+    Ok(added_count)
+}
+
+// 🌐 API Handler for the POST endpoint
+async fn trigger_scan_handler(State(state): State<AppState>) -> impl IntoResponse {
+    match scan_untracked_files(&state).await {
+        Ok(count) => (
+            StatusCode::OK,
+            Json(json!({
+                "success": true,
+                "message": format!("Scan completed. Cataloged {} new assets.", count),
+                "added": count
+            })),
+        ),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "success": false,
+                "error": err
+            })),
+        ),
+    }
 }

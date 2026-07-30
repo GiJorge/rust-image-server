@@ -359,7 +359,10 @@ function createCardElement(name, imgIndex) {
     card.className = 'card';
     card.onclick = () => openModal(imgIndex);
 
+    // 💡 Extract clean stem without extension to target the generated thumbnail
     const cleanBase = name.includes('.') ? name.substring(0, name.lastIndexOf('.')) : name;
+    
+    // Server generates a .jpg thumbnail with clean stem regardless of media extension (.mov, .mp4, .png, etc.)
     const thumbFilename = cleanBase + '.jpg';
     const albumName = imageAlbumMap[name] || "";
 
@@ -367,7 +370,7 @@ function createCardElement(name, imgIndex) {
         ? `<div class="image-album-badge">📂 ${albumName}</div>`
         : '';
 
-    // 🎬 Video play badge overlay (Rendered only for video files)
+    // 🎬 Video badge overlay (triggers for .mov, .mp4, .webm, .mkv, .avi)
     const videoBadgeHtml = isVideoFile(name)
         ? `<div class="video-badge" title="Video File">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
@@ -377,17 +380,20 @@ function createCardElement(name, imgIndex) {
            </div>`
         : '';
 
+    // Display clean name without initial timestamp prefix (e.g., 1718000000_my_video.mov -> my_video.mov)
+    const displayName = name.replace(/^\d+_/, '');
+
     card.innerHTML = `
         <div class="thumb-container" style="position: relative;">
             ${albumBadgeHtml}
             ${videoBadgeHtml}
             <img src=""
-                 data-src="/thumb/${thumbFilename}"
-                 alt="Gallery Preview Thumbnail"
+                 data-src="/thumb/${encodeURIComponent(thumbFilename)}"
+                 alt="${displayName}"
                  style="width: 100%; height: 100%; object-fit: cover; display: block;"
-                 onerror="this.onerror = null; if(this.src.endsWith('.jpg')) { this.src = '/thumb/${cleanBase}.webp'; }">
+                 onerror="this.onerror = null; this.src='/images/${encodeURIComponent(name)}';">
         </div>
-        <div class="file-name">${name.replace(/^\d+_/, '')}</div>
+        <div class="file-name">${displayName}</div>
     `;
     return card;
 }
@@ -402,16 +408,21 @@ function renderGalleryHTML() {
 }
 
 // --- Data Fetching and Multi-Upload Handler ---
-
 async function loadImages() {
     if (loading || !hasMore) return;
-    loading = true;
-    loadingIndicator.style.display = 'block';
+    
+    // 💡 Safely reference the DOM element
+    const indicator = document.getElementById('loading-indicator') || loadingIndicator;
 
-    const search = document.getElementById('search-input').value;
-    const sort = document.getElementById('sort-select').value;
-    const sizeValue = document.getElementById('size-select').value;
-    const albumValue = document.getElementById('album-select').value;
+    loading = true;
+    if (indicator) {
+        indicator.style.display = 'block';
+    }
+
+    const search = document.getElementById('search-input')?.value || '';
+    const sort = document.getElementById('sort-select')?.value || 'newest';
+    const sizeValue = document.getElementById('size-select')?.value || 'all';
+    const albumValue = document.getElementById('album-select')?.value || 'all';
 
     let extraParams = '';
     if (albumValue !== 'all') extraParams += `&album=${encodeURIComponent(albumValue)}`;
@@ -444,11 +455,228 @@ async function loadImages() {
 
         offset += data.images.length;
         hasMore = data.has_more;
+
     } catch (err) {
         console.error("Failed to load images batch chunk:", err);
     } finally {
         loading = false;
-        loadingIndicator.style.display = 'none';
+        
+        // 💡 Null-safe display hide
+        if (indicator) {
+            indicator.style.display = 'none';
+        }
+
+        updateLoadMoreButtonState();
+
+        if (hasMore && document.body.offsetHeight <= window.innerHeight) {
+            loadImages();
+        }
+    }
+}
+
+async function loadImages() {
+    if (loading || !hasMore) return;
+    
+    // 💡 Safely reference the DOM element
+    const indicator = document.getElementById('loading-indicator') || loadingIndicator;
+
+    loading = true;
+    if (indicator) {
+        indicator.style.display = 'block';
+    }
+
+    const search = document.getElementById('search-input')?.value || '';
+    const sort = document.getElementById('sort-select')?.value || 'newest';
+    const sizeValue = document.getElementById('size-select')?.value || 'all';
+    const albumValue = document.getElementById('album-select')?.value || 'all';
+
+    let extraParams = '';
+    if (albumValue !== 'all') extraParams += `&album=${encodeURIComponent(albumValue)}`;
+
+    if (sizeValue === 'small') {
+        extraParams += '&max_size=1048576';
+    } else if (sizeValue === 'medium') {
+        extraParams += '&min_size=1048576&max_size=5242880';
+    } else if (sizeValue === 'large') {
+        extraParams += '&min_size=5242880';
+    }
+
+    try {
+        const url = `/api/images?offset=${offset}&limit=${limit}&search=${encodeURIComponent(search)}&sort=${sort}${extraParams}`;
+        const response = await fetch(url);
+        const data = await response.json();
+
+        data.images.forEach((imgObj) => {
+            const name = imgObj.filename;
+            const albumName = imgObj.album;
+
+            const imgIndex = allImages.length;
+            allImages.push(name);
+            imageAlbumMap[name] = albumName;
+
+            const card = createCardElement(name, imgIndex);
+            gallery.appendChild(card);
+            observer.observe(card.querySelector('img'));
+        });
+
+        offset += data.images.length;
+        hasMore = data.has_more;
+
+    } catch (err) {
+        console.error("Failed to load images batch chunk:", err);
+    } finally {
+        loading = false;
+        
+        // 💡 Null-safe display hide
+        if (indicator) {
+            indicator.style.display = 'none';
+        }
+
+        updateLoadMoreButtonState();
+
+        if (hasMore && document.body.offsetHeight <= window.innerHeight) {
+            loadImages();
+        }
+    }
+}async function loadImages() {
+    if (loading || !hasMore) return;
+    
+    // 💡 Safely reference the DOM element
+    const indicator = document.getElementById('loading-indicator') || loadingIndicator;
+
+    loading = true;
+    if (indicator) {
+        indicator.style.display = 'block';
+    }
+
+    const search = document.getElementById('search-input')?.value || '';
+    const sort = document.getElementById('sort-select')?.value || 'newest';
+    const sizeValue = document.getElementById('size-select')?.value || 'all';
+    const albumValue = document.getElementById('album-select')?.value || 'all';
+
+    let extraParams = '';
+    if (albumValue !== 'all') extraParams += `&album=${encodeURIComponent(albumValue)}`;
+
+    if (sizeValue === 'small') {
+        extraParams += '&max_size=1048576';
+    } else if (sizeValue === 'medium') {
+        extraParams += '&min_size=1048576&max_size=5242880';
+    } else if (sizeValue === 'large') {
+        extraParams += '&min_size=5242880';
+    }
+
+    try {
+        const url = `/api/images?offset=${offset}&limit=${limit}&search=${encodeURIComponent(search)}&sort=${sort}${extraParams}`;
+        const response = await fetch(url);
+        const data = await response.json();
+
+        data.images.forEach((imgObj) => {
+            const name = imgObj.filename;
+            const albumName = imgObj.album;
+
+            const imgIndex = allImages.length;
+            allImages.push(name);
+            imageAlbumMap[name] = albumName;
+
+            const card = createCardElement(name, imgIndex);
+            gallery.appendChild(card);
+            observer.observe(card.querySelector('img'));
+        });
+
+        offset += data.images.length;
+        hasMore = data.has_more;
+
+    } catch (err) {
+        console.error("Failed to load images batch chunk:", err);
+    } finally {
+        loading = false;
+        
+        // 💡 Null-safe display hide
+        if (indicator) {
+            indicator.style.display = 'none';
+        }
+
+        updateLoadMoreButtonState();
+
+        if (hasMore && document.body.offsetHeight <= window.innerHeight) {
+            loadImages();
+        }
+    }
+}async function loadImages() {
+    if (loading || !hasMore) return;
+    
+    // 💡 Safely reference the DOM element
+    const indicator = document.getElementById('loading-indicator') || loadingIndicator;
+
+    loading = true;
+    if (indicator) {
+        indicator.style.display = 'block';
+    }
+
+    const search = document.getElementById('search-input')?.value || '';
+    const sort = document.getElementById('sort-select')?.value || 'newest';
+    const sizeValue = document.getElementById('size-select')?.value || 'all';
+    const albumValue = document.getElementById('album-select')?.value || 'all';
+
+    let extraParams = '';
+    if (albumValue !== 'all') extraParams += `&album=${encodeURIComponent(albumValue)}`;
+
+    if (sizeValue === 'small') {
+        extraParams += '&max_size=1048576';
+    } else if (sizeValue === 'medium') {
+        extraParams += '&min_size=1048576&max_size=5242880';
+    } else if (sizeValue === 'large') {
+        extraParams += '&min_size=5242880';
+    }
+
+    try {
+        const url = `/api/images?offset=${offset}&limit=${limit}&search=${encodeURIComponent(search)}&sort=${sort}${extraParams}`;
+        const response = await fetch(url);
+        const data = await response.json();
+
+        data.images.forEach((imgObj) => {
+            const name = imgObj.filename;
+            const albumName = imgObj.album;
+
+            const imgIndex = allImages.length;
+            allImages.push(name);
+            imageAlbumMap[name] = albumName;
+
+            const card = createCardElement(name, imgIndex);
+            gallery.appendChild(card);
+            observer.observe(card.querySelector('img'));
+        });
+
+        offset += data.images.length;
+        hasMore = data.has_more;
+
+    } catch (err) {
+        console.error("Failed to load images batch chunk:", err);
+    } finally {
+        loading = false;
+        
+        // 💡 Null-safe display hide
+        if (indicator) {
+            indicator.style.display = 'none';
+        }
+
+        updateLoadMoreButtonState();
+
+        if (hasMore && document.body.offsetHeight <= window.innerHeight) {
+            loadImages();
+        }
+    }
+}
+
+// 💡 Helper to show/hide the button container
+function updateLoadMoreButtonState() {
+    const btnContainer = document.getElementById('load-more-container');
+    if (!btnContainer) return;
+
+    if (hasMore) {
+        btnContainer.style.display = 'flex'; // Use flex to match your CSS alignment
+    } else {
+        btnContainer.style.display = 'none';
     }
 }
 
@@ -457,10 +685,25 @@ async function loadImages() {
 let totalBatchCount = 0;
 let processedBatchCount = 0;
 
+// 💡 200 MB limit in bytes
+const MAX_UPLOAD_LIMIT_BYTES = 200 * 1024 * 1024;
+
 function handleUpload(input) {
     if (!input.files || input.files.length === 0) return;
     const password = sessionStorage.getItem('gallery_session_pwd');
     const files = Array.from(input.files);
+
+    // 💡 1. Pre-upload file size check (instant client feedback)
+    const oversizedFiles = files.filter(f => f.size > MAX_UPLOAD_LIMIT_BYTES);
+    if (oversizedFiles.length > 0) {
+        const fileListStr = oversizedFiles
+            .map(f => `• ${f.name} (${(f.size / (1024 * 1024)).toFixed(1)} MB)`)
+            .join('\n');
+
+        alert(`⚠️ Upload canceled:\nThe following file(s) exceed the 200 MB maximum size limit:\n\n${fileListStr}`);
+        input.value = '';
+        return;
+    }
 
     const formData = new FormData();
     formData.append('password', password || '');
@@ -509,18 +752,26 @@ function handleUpload(input) {
             files.forEach(file => pendingUploads.delete(file.name));
             // Don't hide the progress bar yet! Let setupWebSocket complete the tracking.
         } else if (xhr.status === 401) {
+            files.forEach(file => pendingUploads.delete(file.name));
             alert("Upload unauthorized. Resetting session credentials.");
             sessionStorage.removeItem('gallery_session_pwd');
-            progressContainer.style.display = 'none';
+            if (progressContainer) progressContainer.style.display = 'none';
+        } else if (xhr.status === 413) {
+            // 💡 2. Specific handling for Axum HTTP 413 Payload Too Large
+            files.forEach(file => pendingUploads.delete(file.name));
+            alert("Upload failed: The total payload size exceeds the 200 MB server limit.");
+            if (progressContainer) progressContainer.style.display = 'none';
         } else {
-            alert("Upload failed: " + xhr.responseText);
-            progressContainer.style.display = 'none';
+            files.forEach(file => pendingUploads.delete(file.name));
+            alert("Upload failed: " + (xhr.responseText || `Server status ${xhr.status}`));
+            if (progressContainer) progressContainer.style.display = 'none';
         }
     };
 
     xhr.onerror = () => {
-        alert("Network transmission error occurred.");
-        progressContainer.style.display = 'none';
+        files.forEach(file => pendingUploads.delete(file.name));
+        alert("Network transmission error occurred during upload.");
+        if (progressContainer) progressContainer.style.display = 'none';
     };
 
     xhr.send(formData);
@@ -783,8 +1034,18 @@ function openModal(index) {
     window.addEventListener('keydown', handleKeyPress);
 }
 // Close Modal
+// Close Modal
 function closeModal() {
     const modal = document.getElementById('modal-container');
+    
+    // 🎬 STOP AUDIO & VIDEO PLAYBACK
+    const videoElement = modal ? modal.querySelector('video') : null;
+    if (videoElement) {
+        videoElement.pause();
+        videoElement.src = '';
+        videoElement.load(); // Forces browser to immediately drop memory buffer & audio track
+    }
+
     modal.style.display = 'none';
 
     // 🔓 UNLOCK BODY SCROLLING
@@ -799,6 +1060,10 @@ function closeModal() {
 
     window.removeEventListener('keydown', handleKeyPress);
 }
+
+
+
+
 // Target-based click closing (for clicking background overlay)
 function closeModalTarget(event) {
     if (event.target.id === 'modal-container') {
@@ -1289,6 +1554,20 @@ window.onscroll = () => {
     }
 };
 
+// Function to control visibility of the Load More button
+function updateLoadMoreButtonVisibility(hasMoreItems) {
+    const container = document.getElementById('load-more-container');
+    if (!container) return;
+
+    if (hasMoreItems) {
+        container.style.display = 'block'; // Show button if more images exist
+    } else {
+        container.style.display = 'none';  // Hide button if all images are loaded
+    }
+}
+
+
+
 // --- Gesture Mapping Event Hook Handlers ---
 const wrapper = document.querySelector('.panzoom-wrapper');
 wrapper.addEventListener('wheel', (e) => {
@@ -1422,3 +1701,56 @@ function resetPanZoom() {
 
 
 document.addEventListener('DOMContentLoaded', initTouchEvents);
+
+async function triggerDirectoryScan() {
+    const scanBtn = document.getElementById('scan-btn');
+    const scanIcon = document.getElementById('scan-icon');
+    const scanText = document.getElementById('scan-text');
+
+    if (scanBtn) {
+        scanBtn.disabled = true;
+        scanBtn.classList.add('btn-scanning');
+    }
+    
+    if (scanIcon) {
+        scanIcon.classList.add('scan-spinning');
+    }
+
+    if (scanText) {
+        scanText.innerText = 'Scanning...';
+    }
+
+    try {
+        const response = await fetch('/api/scan', { method: 'POST' });
+        const result = await response.json();
+
+        if (result.success) {
+            // Optional: Give quick feedback before refreshing
+            if (result.added > 0) {
+                console.log(`Scan finished: Cataloged ${result.added} new files.`);
+            }
+            
+            // Re-fetch images array to populate UI grid automatically
+            if (typeof fetchImages === 'function') {
+                await fetchImages();
+            }
+        } else {
+            alert('Scan failed: ' + result.error);
+        }
+    } catch (err) {
+        console.error('Scan request failed:', err);
+        alert('Failed to connect to server for scan.');
+    } finally {
+        // Reset button state and stop animation
+        if (scanBtn) {
+            scanBtn.disabled = false;
+            scanBtn.classList.remove('btn-scanning');
+        }
+        if (scanIcon) {
+            scanIcon.classList.remove('scan-spinning');
+        }
+        if (scanText) {
+            scanText.innerText = 'Scan Storage';
+        }
+    }
+}

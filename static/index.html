@@ -15,9 +15,20 @@
 <body>
     <button id="theme-toggle" onclick="toggleTheme()">🌓</button>
     <button id="upload-fab" onclick="triggerUploadCheck()">+</button>
-    <!-- 🆕 Updated accept attribute to allow both images and videos -->
-    <input type="file" id="file-input" style="display: none" accept="image/*,video/*" onchange="handleUpload(this)">
+    <button id="scan-btn" onclick="triggerDirectoryScan()" class="btn">
+    <span id="scan-icon" style="display: inline-block;">🔄</span> 
+    <span id="scan-text">Scan Storage</span>
+</button>
+    <!-- 🆕 Updated accept attribute to allow both images and videos
+    <input type="file" id="file-input" style="display: none" accept="image/*,video/*" onchange="handleUpload(this)"> -->
 
+    <input 
+    type="file" 
+    id="file-input" 
+    style="display: none" 
+    accept="image/*,video/*,.mov,.MOV,.mp4,.MP4,.mkv,.avi" 
+    onchange="handleUpload(this)">
+    
     <div id="loading-overlay">
         <div class="spinner"></div>
         <div id="upload-status">Uploading...</div>
@@ -96,7 +107,17 @@
     </div>
 
     <div class="container" id="gallery"></div>
-    <div id="loading-indicator">Loading more...</div>
+   
+<!-- 💡 Load More Container (Controlled by CSS & JS) -->
+<div id="load-more-container">
+    <button id="load-more-btn" onclick="loadImages()">Load More Media</button>
+</div>
+<!-- 💡 Loading Indicator -->
+<div id="loading-indicator" style="text-align: center; padding: 20px; display: none; color: #aaa; font-size: 14px;">
+    ⏳ Loading media...
+</div>
+
+
 
     <div id="modal-container" onclick="closeModalTarget(event)">
         <span class="close-btn" onclick="closeModal()">&times;</span>

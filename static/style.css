@@ -684,7 +684,61 @@ body.modal-open {
     fill: #ffffff;
 }
 
+/* 📦 Container Wrapper Styling */
+#load-more-container {
+    width: 100%;
+    display: flex;             /* Centering target using flexbox */
+    justify-content: center;
+    align-items: center;
+    padding: 32px 0;
+    margin-top: 16px;
+    clear: both;               /* Prevents float/grid overlap issues */
+}
+
+
+/* 🔘 Load More Button Styling */
+#load-more-btn {
+    background-color: #121a0f;
+    color: #ffffff;
+    border: none;
+    padding: 12px 28px;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    border-radius: 8px;
+    cursor: pointer;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    transition: background-color 0.2s, transform 0.1s;
+    outline: none;
+}
+
+#load-more-btn:hover {
+    background-color: rgb(69, 216, 29);
+    transform: translateY(-1px);
+}
+
+#load-more-btn:active {
+    transform: translateY(0);
+}
 
 .hidden {
     display: none !important;
+}
+
+/* 🔄 Spinning animation for the scan icon */
+@keyframes spin-icon {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+.scan-spinning {
+    display: inline-block;
+    animation: spin-icon 1s linear infinite;
+}
+
+/* Optional styling while scanning is in progress */
+.btn-scanning {
+    opacity: 0.8;
+    cursor: wait !important;
+    pointer-events: none;
 }
