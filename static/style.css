@@ -39,38 +39,60 @@ body {
 
 h1 { text-align: center; color: var(--header-color); margin-top: 20px; margin-bottom: 10px; }
 
-.toolbar {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 12px;
-    justify-content: center;
-    align-items: center;
-    max-width: 900px;
-    margin: 0 auto 20px;
-    padding: 15px;
-    background: var(--card-bg);
-    border-radius: 12px;
-    box-shadow: 0 4px 12px var(--card-shadow);
-}
+  .toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        justify-content: center;
+        align-items: center;
 
-.toolbar input, .toolbar select {
-    padding: 8px 14px;
-    border-radius: 8px;
-    border: 1px solid var(--border-color);
-    background: var(--bg-color);
-    color: var(--text-color);
-    font-size: 0.95em;
-    outline: none;
-    transition: border-color 0.2s;
-}
+        margin: 0 auto 20px;
+        padding: 15px;
+        background: var(--card-bg);
+        border-radius: 12px;
+        box-shadow: 0 4px 12px var(--card-shadow);
+    }
 
-.toolbar input:focus, .toolbar select:focus { border-color: var(--accent-color); }
-.toolbar input[type="text"] { min-width: 240px; flex-grow: 1; }
+    .toolbar input, .toolbar select {
+        padding: 8px 14px;
+        border-radius: 8px;
+        border: 1px solid var(--border-color);
+        background: var(--bg-color);
+        color: var(--text-color);
+        font-size: 0.95em;
+        outline: none;
+        transition: border-color 0.2s;
+    }
 
+    .toolbar input:focus, .toolbar select:focus { border-color: var(--accent-color); }
+    .toolbar input[type="text"] { min-width: 240px; flex-grow: 1; padding-left: 36px; }
+
+    /* Helper styles to make inline SVGs align perfectly with text */
+    .toolbar-icon {
+        display: inline-block;
+        vertical-align: middle;
+        margin-right: 6px;
+    }
+
+    /* Search box relative positioning container */
+    .search-wrapper {
+        position: relative;
+        display: flex;
+        flex-grow: 1;
+        min-width: 240px;
+    }
+    .search-wrapper .toolbar-icon {
+        position: absolute;
+        left: 12px;
+        top: 50%;
+        transform: translateY(-50%);
+        pointer-events: none;
+        margin-right: 0;
+    }
 .container { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; padding: 10px; }
 
 @media screen and (max-width: 768px) {
-    .container { display: flex; flex-wrap: wrap; gap: 34px; justify-content: center; padding: 10px; }
+    .container { display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; padding: 2px; }
 }
 
 .card {
@@ -741,4 +763,14 @@ body.modal-open {
     opacity: 0.8;
     cursor: wait !important;
     pointer-events: none;
+}
+
+
+.btn {
+  background-color: var(--btn-bg);
+  color: var(--btn-text);
+  border: 2px solid var(--btn-border);
+   
+  cursor: pointer;
+  transition: background-color 0.3s, color 0.3s; /* Smooth theme transition */
 }

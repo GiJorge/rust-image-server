@@ -2,12 +2,12 @@ use axum::{
     extract::{DefaultBodyLimit, Multipart, Path, Query, State},
     extract::ws::{WebSocket, WebSocketUpgrade},
     http::{header, StatusCode},
-    response::{Html, IntoResponse, Json}, // 👈 Removed Response
+    response::{Html, IntoResponse, Json}, 
     routing::{get, post},
     Router,
 };
 
-use serde_json::json; // 👈 Removed Value
+use serde_json::json;
 
 use std::process::{Command, Stdio};
 use tokio::io::AsyncWriteExt;
@@ -825,7 +825,7 @@ async fn get_albums_list(State(state): State<AppState>) -> impl IntoResponse {
 
 
 
-use image::imageops::FilterType;
+//use image::imageops::FilterType;
 
 fn generate_oriented_thumbnail(img_path: &std::path::Path, thumb_path: &std::path::Path) -> bool {
     let mut raw_img = match image::open(img_path) {
@@ -859,10 +859,10 @@ fn generate_oriented_thumbnail(img_path: &std::path::Path, thumb_path: &std::pat
     }
 
     // 🎯 Fast downscaling filter (Triangle is ~4x faster than Lanczos3)
-    let thumbnail = raw_img.resize_to_fill(300, 300, FilterType::Triangle);
+    //let thumbnail = raw_img.resize_to_fill(300, 300, FilterType::Triangle);
+    let thumbnail = raw_img.thumbnail(400, 400);
     thumbnail.save_with_format(thumb_path, image::ImageFormat::Jpeg).is_ok()
 }
-
 
 
 

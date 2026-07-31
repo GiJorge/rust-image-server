@@ -1750,7 +1750,7 @@ async function triggerDirectoryScan() {
             scanIcon.classList.remove('scan-spinning');
         }
         if (scanText) {
-            scanText.innerText = 'Scan Storage';
+            scanText.innerText = 'Scan';
         }
     }
 }

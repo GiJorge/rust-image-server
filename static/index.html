@@ -8,17 +8,21 @@
     <link rel="icon" type="image/x-icon" href="/favicon.ico">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Advent+Pro:ital,wght@0,100..900;1,100..900&family=Arima:wght@100..700&family=Croissant+One&family=Edu+AU+VIC+WA+NT+Guides&family=Kelly+Slab&family=Smooch+Sans:wght@100..900&family=Special+Elite&display=swap" rel="stylesheet">
-    
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Advent+Pro:ital,wght@0,100..900;1,100..900&family=Arima:wght@100..700&family=Croissant+One&family=Edu+AU+VIC+WA+NT+Guides&family=Kelly+Slab&family=Smooch+Sans:wght@100..900&family=Special+Elite&display=swap" rel="stylesheet">
+
     <link rel="stylesheet" href="/static/style.css">
     <script src="/static/app.js" defer></script>
 </head>
 <body>
     <button id="theme-toggle" onclick="toggleTheme()">🌓</button>
     <button id="upload-fab" onclick="triggerUploadCheck()">+</button>
-    <button id="scan-btn" onclick="triggerDirectoryScan()" class="btn">
-    <span id="scan-icon" style="display: inline-block;">🔄</span> 
-    <span id="scan-text">Scan Storage</span>
-</button>
+
+
+
+
+
+
     <!-- 🆕 Updated accept attribute to allow both images and videos
     <input type="file" id="file-input" style="display: none" accept="image/*,video/*" onchange="handleUpload(this)"> -->
 
@@ -87,22 +91,48 @@
             </div>
         </div>
     </div>
+ <div class="toolbar">
+      
 
-    <div class="toolbar">
-        <button onclick="forgetPassword()" style="background: none; border: 1px solid var(--border-color); color: var(--text-color); padding: 5px 10px; border-radius: 5px; cursor: pointer; font-size: 12px; margin-right: auto;">🔐 Clear Session</button>
-        <input type="text" id="search-input" placeholder="🔍 Search filenames..." oninput="triggerFilterReset()">
+
+<button id="scan-btn" onclick="triggerDirectoryScan()" class="btn">
+    <span id="scan-icon" style="display: inline-block; vertical-align: middle; margin-right: 6px;">
+        <svg xmlns="http://w3.org" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <!-- Target this ID with your JS to spin it -->
+            <circle id="sync-circle" cx="12" cy="12" r="9" stroke-dasharray="12 6 2 4" />
+        </svg>
+    </span> 
+    <span id="scan-text">Scan</span>
+</button>
+  <!-- Clear Session Button -->
+        <button onclick="forgetPassword()" style="background: none; border: 1px solid var(--border-color); color: var(--text-color); padding: 5px 10px; border-radius: 5px; cursor: pointer; font-size: 12px; margin-right: auto; display: flex; align-items: center;">
+            <svg class="toolbar-icon" xmlns="http://w3.org" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+            Clear Session
+        </button>
+
+        <!-- Search Input with Floating SVG Search Icon -->
+        <div class="search-wrapper">
+            <svg class="toolbar-icon" xmlns="http://w3.org" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+            <input type="text" id="search-input" placeholder="Search filenames..." oninput="triggerFilterReset()">
+        </div>
+
+        <!-- Album Select Menu -->
         <select id="album-select" onchange="triggerFilterReset()">
-            <option value="all">📁 All Albums / General</option>
+            <option value="all">&#128193; All Albums / General</option>
         </select>
+
+        <!-- Sort Select Menu -->
         <select id="sort-select" onchange="triggerFilterReset()">
-            <option value="recent">🆕 Newest First</option>
-            <option value="oldest">🔢 Oldest First</option>
+            <option value="recent">&#128197; Newest First</option>
+            <option value="oldest">&#128226; Oldest First</option>
         </select>
+
+        <!-- Size Select Menu -->
         <select id="size-select" onchange="triggerFilterReset()">
-            <option value="all">🖼 Any Size</option>
-            <option value="small">📐 Small (&lt; 1MB)</option>
-            <option value="medium">📏 Medium (1MB - 5MB)</option>
-            <option value="large">🐋 Large (&gt; 5MB)</option>
+            <option value="all">&#128444; Any Size</option>
+            <option value="small">&#128142; Small (&lt; 1MB)</option>
+            <option value="medium">&#128141; Medium (1MB - 5MB)</option>
+            <option value="large">&#128011; Large (&gt; 5MB)</option>
         </select>
     </div>
 
