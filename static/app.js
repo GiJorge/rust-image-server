@@ -69,6 +69,8 @@ async function initManifest() {
 // 2. Helper function to refresh counter text
 
 
+
+
 function updateCounterDisplay() {
     const counterElem = document.getElementById('lightbox-counter');
     if (!counterElem) return;
@@ -76,11 +78,9 @@ function updateCounterDisplay() {
     if (!allImages || allImages.length === 0) {
         counterElem.textContent = "0 / 0";
     } else {
-        // When allImages has 60 items, index 30 becomes: "31 / 60"
         counterElem.textContent = `${currentIndex + 1} / ${allImages.length}`;
     }
 }
-
 
 // 3. Call updateCounterDisplay inside loadLightboxImage
 function loadLightboxImage(index) {
@@ -165,20 +165,42 @@ function requestActionAuthorization(callbackAction) {
 }
 
 function closeAuthModal() {
-    document.getElementById('auth-modal').style.display = 'none';
-    document.getElementById('auth-password-field').value = '';
-    activeAuthCallback = null;
+    const modal = document.getElementById('auth-modal');
+    const input = document.getElementById('auth-password-field');
+    
+    if (modal) modal.style.display = 'none';
+    if (input) input.value = '';
+
+    // If modal was closed without successful auth, resolve with null
+    if (authModalResolver) {
+        authModalResolver(null);
+        authModalResolver = null;
+    }
 }
 
-function submitAuthModal() {
-    const pwd = document.getElementById('auth-password-field').value;
-    if (!pwd) return;
+async function submitAuthModal() {
+    const input = document.getElementById('auth-password-field');
+    const password = input ? input.value.trim() : '';
 
-    sessionStorage.setItem('gallery_session_pwd', pwd);
-    const actionToRun = activeAuthCallback;
-    closeAuthModal();
+    if (!password) {
+        alert("Password cannot be empty.");
+        return;
+    }
 
-    if (actionToRun) actionToRun(pwd);
+    // Verify entered password against Axum backend
+    const isValid = await checkPasswordWithServer(password);
+
+    if (isValid) {
+        sessionStorage.setItem('gallery_session_pwd', password);
+        closeAuthModal();
+        if (authModalResolver) authModalResolver(password);
+    } else {
+        alert("❌ Incorrect master password. Please try again.");
+        if (input) {
+            input.value = '';
+            input.focus();
+        }
+    }
 }
 
 // --- Delete Modal Functions ---
@@ -688,60 +710,65 @@ let processedBatchCount = 0;
 // 💡 200 MB limit in bytes
 const MAX_UPLOAD_LIMIT_BYTES = 200 * 1024 * 1024;
 
-function handleUpload(input) {
+async function handleUpload(input) {
     if (!input.files || input.files.length === 0) return;
-    const password = sessionStorage.getItem('gallery_session_pwd');
+
+    // Validate password BEFORE running any file processing
+    const password = await getOrVerifyMasterPassword();
+    if (!password) {
+        input.value = '';
+        return; // Canceled or failed auth
+    }
+
     const files = Array.from(input.files);
 
-    // 💡 1. Pre-upload file size check (instant client feedback)
+    // Pre-upload file size check
     const oversizedFiles = files.filter(f => f.size > MAX_UPLOAD_LIMIT_BYTES);
     if (oversizedFiles.length > 0) {
         const fileListStr = oversizedFiles
             .map(f => `• ${f.name} (${(f.size / (1024 * 1024)).toFixed(1)} MB)`)
             .join('\n');
 
-        alert(`⚠️ Upload canceled:\nThe following file(s) exceed the 200 MB maximum size limit:\n\n${fileListStr}`);
+        alert(`⚠️ Upload canceled:\nThe following file(s) exceed the limit:\n\n${fileListStr}`);
         input.value = '';
         return;
     }
 
     const formData = new FormData();
-    formData.append('password', password || '');
-    formData.append('album', globalSelectedUploadAlbum || '');
+    formData.append('password', password);
+    formData.append('album', typeof globalSelectedUploadAlbum !== 'undefined' ? (globalSelectedUploadAlbum || '') : '');
 
     files.forEach(file => {
         formData.append('image', file);
         pendingUploads.add(file.name);
     });
 
-    // Setup global counters for real-time WebSocket tracking
     totalBatchCount = files.length;
     processedBatchCount = 0;
 
-    // --- UI Progress Bar References ---
     const progressContainer = document.getElementById('upload-progress-container');
     const progressText = document.getElementById('upload-progress-text');
     const progressPercent = document.getElementById('upload-progress-percent');
     const progressBarFill = document.getElementById('upload-progress-bar-fill');
 
-    // Display progress bar
-    progressText.innerText = `Uploading ${files.length} file(s)...`;
-    progressPercent.innerText = '0%';
-    progressBarFill.style.width = '0%';
-    progressContainer.style.display = 'block';
-    progressContainer.style.opacity = '1';
+    if (progressText) progressText.innerText = `Uploading ${files.length} file(s)...`;
+    if (progressPercent) progressPercent.innerText = '0%';
+    if (progressBarFill) progressBarFill.style.width = '0%';
+    if (progressContainer) {
+        progressContainer.style.display = 'block';
+        progressContainer.style.opacity = '1';
+    }
 
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/api/upload', true);
 
-    // Track initial Network Transfer Progress (0% to 50%)
     xhr.upload.onprogress = (event) => {
         if (event.lengthComputable && totalBatchCount > 0) {
-            const uploadPercent = Math.round((event.loaded / event.total) * 50); // Scale up to 50%
-            progressBarFill.style.width = uploadPercent + '%';
-            progressPercent.innerText = uploadPercent + '%';
+            const uploadPercent = Math.round((event.loaded / event.total) * 50);
+            if (progressBarFill) progressBarFill.style.width = uploadPercent + '%';
+            if (progressPercent) progressPercent.innerText = uploadPercent + '%';
             
-            if (uploadPercent >= 50) {
+            if (uploadPercent >= 50 && progressText) {
                 progressText.innerText = `Processing thumbnails (0/${totalBatchCount})...`;
             }
         }
@@ -750,16 +777,14 @@ function handleUpload(input) {
     xhr.onload = () => {
         if (xhr.status === 200) {
             files.forEach(file => pendingUploads.delete(file.name));
-            // Don't hide the progress bar yet! Let setupWebSocket complete the tracking.
         } else if (xhr.status === 401) {
             files.forEach(file => pendingUploads.delete(file.name));
-            alert("Upload unauthorized. Resetting session credentials.");
             sessionStorage.removeItem('gallery_session_pwd');
+            alert("Upload unauthorized. Session expired or reset.");
             if (progressContainer) progressContainer.style.display = 'none';
         } else if (xhr.status === 413) {
-            // 💡 2. Specific handling for Axum HTTP 413 Payload Too Large
             files.forEach(file => pendingUploads.delete(file.name));
-            alert("Upload failed: The total payload size exceeds the 200 MB server limit.");
+            alert("Upload failed: Total payload exceeds server limit.");
             if (progressContainer) progressContainer.style.display = 'none';
         } else {
             files.forEach(file => pendingUploads.delete(file.name));
@@ -777,8 +802,6 @@ function handleUpload(input) {
     xhr.send(formData);
     input.value = '';
 }
-
-
 
 
 
@@ -868,42 +891,53 @@ async function onAlbumFilterChange(e) {
 
 // 3. Updated fetch function that sends the album parameter to Axum
 async function fetchNextPageOfImages() {
-    const offset = allImages.length;
-    const limit = 30;
+    if (loading || !hasMore) return 0;
 
-    // Build URL with offset, limit, and active album filter
-    let url = `/api/images?offset=${offset}&limit=${limit}`;
-    
-    // Append album parameter if not default 'all'
-    if (currentActiveAlbum !== 'all') {
-        url += `&album=${encodeURIComponent(currentActiveAlbum)}`;
+    const currentOffset = allImages.length;
+    const search = document.getElementById('search-input')?.value || '';
+    const sort = document.getElementById('sort-select')?.value || 'newest';
+    const sizeValue = document.getElementById('size-select')?.value || 'all';
+
+    let extraParams = '';
+    if (currentActiveAlbum && currentActiveAlbum !== 'all') {
+        extraParams += `&album=${encodeURIComponent(currentActiveAlbum)}`;
     }
+    if (sizeValue === 'small') extraParams += '&max_size=1048576';
+    else if (sizeValue === 'medium') extraParams += '&min_size=1048576&max_size=5242880';
+    else if (sizeValue === 'large') extraParams += '&min_size=5242880';
 
-    console.log(`📡 [PAGINATION] Requesting: ${url}`);
-    
+    const url = `/api/images?offset=${currentOffset}&limit=${limit}&search=${encodeURIComponent(search)}&sort=${sort}${extraParams}`;
+
+    loading = true;
     try {
         const response = await fetch(url);
         if (!response.ok) return 0;
 
-        const data = await response.json(); // Returns { images: [...], has_more: boolean }
-        const newBatch = (data.images || []).map(item => item.filename);
+        const data = await response.json();
+        const incomingImages = data.images || [];
 
-        if (newBatch.length === 0) {
-            console.log(`🏁 No more images found for album: "${currentActiveAlbum}".`);
-            return 0;
-        }
+        incomingImages.forEach((imgObj) => {
+            if (!allImages.includes(imgObj.filename)) {
+                allImages.push(imgObj.filename);
+                imageAlbumMap[imgObj.filename] = imgObj.album;
 
-        // Append only filtered album images to master list
-        allImages.push(...newBatch);
+                // Append card to gallery UI seamlessly
+                const card = createCardElement(imgObj.filename, allImages.length - 1);
+                gallery.appendChild(card);
+                observer.observe(card.querySelector('img'));
+            }
+        });
 
-        if (typeof renderGridCards === 'function') {
-            renderGridCards(data.images);
-        }
+        offset = allImages.length;
+        hasMore = data.has_more;
+        updateLoadMoreButtonState();
 
-        return newBatch.length;
+        return incomingImages.length;
     } catch (err) {
-        console.error('❌ [PAGINATION] Fetch failed:', err);
+        console.error("❌ Failed fetching pagination batch:", err);
         return 0;
+    } finally {
+        loading = false;
     }
 }
 
@@ -1073,19 +1107,20 @@ function closeModalTarget(event) {
 
 let isTransitioning = false;
 
+
+
 function nextImage(event) {
-    resetPanZoom();
     if (event) event.stopPropagation();
-    if (isTransitioning) return;
+    resetPanZoom();
     navigateWithFade('next');
 }
 
 function prevImage(event) {
-    resetPanZoom();
     if (event) event.stopPropagation();
-    if (isTransitioning) return;
+    resetPanZoom();
     navigateWithFade('prev');
 }
+
 
 // Update lightbox opening logic to align index with the full manifest
 // Lightbox opener with fallback fetch
@@ -1118,63 +1153,41 @@ let isLoadingNextPage = false;
 
 
 async function navigateWithFade(direction) {
-    if (!allImages || allImages.length === 0) return;
+    if (!allImages || allImages.length === 0 || isTransitioning) return;
 
-    const imgElement = document.getElementById('modal-img');
-    if (!imgElement) return;
+    let targetIndex = (direction === 'next') ? currentIndex + 1 : currentIndex - 1;
+
+    // Fetch next chunk dynamically when lightbox hits the end of loaded array
+    if (direction === 'next' && targetIndex >= allImages.length) {
+        if (hasMore && !isLoadingNextPage) {
+            isLoadingNextPage = true;
+            const countFetched = await fetchNextPageOfImages();
+            isLoadingNextPage = false;
+
+            if (countFetched === 0) {
+                targetIndex = 0; // Loop back to start if backend has no remaining items
+            }
+        } else if (!hasMore) {
+            targetIndex = 0; // Loop back to beginning
+        }
+    } else if (direction === 'prev' && targetIndex < 0) {
+        targetIndex = allImages.length - 1; // Wrap around to end
+    }
+
+    const activeContainer = isVideoFile(allImages[targetIndex]) 
+        ? document.getElementById('modal-video') 
+        : document.getElementById('modal-img');
 
     isTransitioning = true;
-    resetPanZoom();
-
-    let targetIndex = currentIndex;
-
-    if (direction === 'next') {
-        targetIndex = currentIndex + 1;
-    } else {
-        targetIndex = currentIndex - 1;
-    }
-
-    // 🚀 REACHED END OF CURRENTLY LOADED ARRAY (e.g. index 30 of 30)
-   if (direction === 'next' && targetIndex >= allImages.length) {
-    console.log(`🚨 [NAVIGATION] Reached end of loaded array (${allImages.length} items). Fetching more...`);
-
-    if (!isLoadingNextPage) {
-        isLoadingNextPage = true;
-        const countFetched = await fetchNextPageOfImages();
-        isLoadingNextPage = false;
-
-        console.log(`🏁 [NAVIGATION] Fetch completed. New countFetched = ${countFetched}, total allImages = ${allImages.length}`);
-
-        if (countFetched === 0) {
-            console.warn(`⚠️ [NAVIGATION] Backend has no more images. Looping to 0.`);
-            targetIndex = 0;
-        } else {
-            // Target index 30 is now valid because allImages length is > 30!
-            console.log(`🎉 [NAVIGATION] Successfully extended array. Moving to index ${targetIndex}`);
-        }
-    } else {
-        console.log(`⏳ [NAVIGATION] Fetch already in progress, skipping duplicate call.`);
-    }
-}
-
-    // Fade OUT and swap to target index
-    imgElement.classList.add('fade-out');
+    if (activeContainer) activeContainer.classList.add('fade-out');
 
     setTimeout(() => {
         currentIndex = targetIndex;
-
-        // Update counter (will now correctly show 31 / 60)
+        loadLightboxImage(currentIndex);
         updateCounterDisplay();
 
-        // Load image 31
-        loadLightboxImage(currentIndex);
-
-        imgElement.classList.remove('fade-out');
-
-        setTimeout(() => {
-            isTransitioning = false;
-        }, 150);
-
+        if (activeContainer) activeContainer.classList.remove('fade-out');
+        setTimeout(() => { isTransitioning = false; }, 150);
     }, 150);
 }
 
@@ -1228,70 +1241,102 @@ async function fetchNextPageOfImages() {
 // Lightbox loader targets filenames from globalManifest
 
 function loadLightboxImage(index) {
-    if (!allImages || allImages.length === 0) return;
+    if (!allImages || allImages.length === 0) return; //
 
-    const filename = allImages[index];
-    if (!filename) return;
+    const filename = allImages[index]; //
+    if (!filename) return; //
 
-    updateCounterDisplay();
+    updateCounterDisplay(); //
 
-    const imgElement = document.getElementById('modal-img');
-    const spinner = document.getElementById('lightbox-spinner');
+    const imgElement = document.getElementById('modal-img'); //[cite: 2]
+    const videoElement = document.getElementById('modal-video'); //[cite: 2]
+    const spinner = document.getElementById('lightbox-spinner'); //[cite: 2]
+    const downloadBtn = document.getElementById('lightbox-download-btn'); //[cite: 2]
 
-    if (currentAbortController) currentAbortController.abort();
-    currentAbortController = new AbortController();
+    if (downloadBtn) {
+        downloadBtn.innerHTML = SVG_ICONS.download; //[cite: 2]
+        downloadBtn.disabled = false; //[cite: 2]
+    }
 
-    if (spinner) spinner.classList.remove('hidden');
+    if (currentAbortController) {
+        currentAbortController.abort(); //[cite: 2]
+    }
+    currentAbortController = new AbortController(); //[cite: 2]
+
+    if (spinner) spinner.classList.remove('hidden'); //[cite: 2]
 
     const cleanStem = filename.includes('.') 
         ? filename.substring(0, filename.lastIndexOf('.')) 
-        : filename;
+        : filename; //[cite: 2]
+        
+    const thumbUrl = `/thumb/${cleanStem}.jpg`; //[cite: 2]
+    const fullResUrl = `/images/${filename}`; //[cite: 2]
 
-    const thumbUrl = `/thumb/${cleanStem}.jpg`;
-    const fullResUrl = `/images/${filename}`;
-
-    // Reset RAM for low-end mobile hardware
-    imgElement.src = '';
-
-    // Test if thumbnail exists before assigning
-    const thumbTester = new Image();
-    thumbTester.src = thumbUrl;
-    
-    thumbTester.onload = () => {
-        if (currentIndex === index) {
-            imgElement.src = thumbUrl; // Show low-res preview first
+    // 🎬 VIDEO HANDLING
+    if (isVideoFile(filename)) { //[cite: 2]
+        if (imgElement) {
+            imgElement.classList.add('hidden'); //[cite: 2]
+            imgElement.src = ''; //[cite: 2]
         }
-    };
-    
-    thumbTester.onerror = () => {
-        // Thumbnail 404s -> Skip straight to full resolution image
-        console.warn(`[THUMBNAIL 404] Missing thumbnail for ${filename}, loading full resolution directly.`);
-    };
 
-    // Load full-resolution image
-    const highResImg = new Image();
-    highResImg.src = fullResUrl;
+        if (videoElement) {
+            videoElement.classList.remove('hidden'); //[cite: 2]
+            videoElement.pause(); //[cite: 2]
+            videoElement.src = fullResUrl; //[cite: 2]
+            videoElement.load(); //[cite: 2]
 
-    const handleSuccess = () => {
-        if (currentIndex === index) {
-            imgElement.src = fullResUrl;
-            if (spinner) spinner.classList.add('hidden');
+            videoElement.onloadeddata = () => {
+                if (currentIndex === index && spinner) spinner.classList.add('hidden'); //[cite: 2]
+            };
+            videoElement.onerror = () => {
+                if (currentIndex === index && spinner) spinner.classList.add('hidden'); //[cite: 2]
+            };
         }
-    };
 
-    const handleError = () => {
-        if (currentIndex === index) {
-            console.error(`❌ Failed to load image: ${fullResUrl}`);
-            if (spinner) spinner.classList.add('hidden');
-        }
-    };
-
-    if ('decode' in highResImg) {
-        highResImg.decode().then(handleSuccess).catch(handleError);
-    } else {
-        highResImg.onload = handleSuccess;
-        highResImg.onerror = handleError;
+        preloadAdjacentImages(index); //[cite: 2]
+        return;
     }
+
+    // 🖼️ IMAGE HANDLING
+    if (videoElement) {
+        videoElement.pause(); //[cite: 2]
+        videoElement.classList.add('hidden'); //[cite: 2]
+        videoElement.src = ''; //[cite: 2]
+    }
+
+    if (imgElement) {
+        imgElement.classList.remove('hidden'); //[cite: 2]
+        imgElement.src = ''; //[cite: 2]
+        imgElement.classList.add('loading'); //[cite: 2]
+        imgElement.src = thumbUrl; //[cite: 2]
+
+        const highResImg = new Image(); //[cite: 2]
+        highResImg.src = fullResUrl; //[cite: 2]
+
+        const handleSuccess = () => {
+            if (currentIndex === index) {
+                imgElement.src = fullResUrl; //[cite: 2]
+                imgElement.classList.remove('loading'); //[cite: 2]
+                if (spinner) spinner.classList.add('hidden'); //[cite: 2]
+            }
+        };
+
+        const handleError = () => {
+            if (currentIndex === index) {
+                imgElement.classList.remove('loading'); //[cite: 2]
+                if (spinner) spinner.classList.add('hidden'); //[cite: 2]
+            }
+        };
+
+        if ('decode' in highResImg) {
+            highResImg.decode().then(handleSuccess).catch(handleError); //[cite: 2]
+        } else {
+            highResImg.onload = handleSuccess; //[cite: 2]
+            highResImg.onerror = handleError; //[cite: 2]
+        }
+    }
+
+    preloadAdjacentImages(index); //[cite: 2]
 }
 
 
@@ -1752,5 +1797,52 @@ async function triggerDirectoryScan() {
         if (scanText) {
             scanText.innerText = 'Scan';
         }
+    }
+}
+
+
+async function getOrVerifyMasterPassword() {
+    let password = sessionStorage.getItem('gallery_session_pwd');
+
+    // 1. Check if stored password is still valid with the server
+    if (password) {
+        const isValid = await checkPasswordWithServer(password);
+        if (isValid) return password;
+        
+        // Purge if invalid
+        sessionStorage.removeItem('gallery_session_pwd');
+    }
+
+    // 2. Open custom HTML modal if no valid session password exists
+    return openAuthModal();
+}
+
+function openAuthModal() {
+    const modal = document.getElementById('auth-modal');
+    const input = document.getElementById('auth-password-field');
+    
+    if (modal) {
+        if (input) input.value = '';
+        modal.style.display = 'flex'; // or 'block' based on your CSS
+        if (input) input.focus();
+    }
+
+    // Return a Promise that resolves when user clicks Confirm or Cancel
+    return new Promise((resolve) => {
+        authModalResolver = resolve;
+    });
+}
+
+async function checkPasswordWithServer(pwd) {
+    try {
+        const res = await fetch('/api/auth/verify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ password: pwd })
+        });
+        return res.status === 200;
+    } catch (err) {
+        console.error("Auth verification failed:", err);
+        return false;
     }
 }

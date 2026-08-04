@@ -98,12 +98,12 @@ h1 { text-align: center; color: var(--header-color); margin-top: 20px; margin-bo
 .card {
     background: var(--card-bg); padding: 10px; border-radius: 12px;
     box-shadow: 0 4px 12px var(--card-shadow); text-align: center;
-    width: 120px; transition: transform 0.2s, background 0.3s; cursor: pointer;
+    width: 200px; transition: transform 0.2s, background 0.3s; cursor: pointer;
 }
 .card:hover { transform: translateY(-5px); }
 
 .thumb-container {
-    width: 120px; height: 160px; overflow: hidden; border-radius: 8px;
+    width: 200px; height: 280px; overflow: hidden; border-radius: 8px;
     margin: 0 auto 5px; background: var(--skeleton-bg); display: flex;
     align-items: center; justify-content: center;
 }

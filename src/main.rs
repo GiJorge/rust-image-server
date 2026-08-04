@@ -7,6 +7,8 @@ use axum::{
     Router,
 };
 
+use axum::body::Bytes;
+
 use serde_json::json;
 
 use std::process::{Command, Stdio};
@@ -25,6 +27,26 @@ use sqlx::{SqlitePool, Row};
 use tokio::sync::{broadcast, Semaphore};
 
 
+// Environment variable or app config storing the true password
+//const MASTER_PASSWORD: &str = "YOUR_SECURE_MASTER_PASSWORD";
+
+
+#[derive(Deserialize)]
+pub struct VerifyAuthPayload {
+    pub password: String,
+}
+
+// Dedicated auth check handler
+async fn verify_password(
+    State(state): State<AppState>,
+    Json(payload): Json<VerifyAuthPayload>,
+) -> impl IntoResponse {
+    if payload.password.trim() == state.master_password {
+        StatusCode::OK
+    } else {
+        StatusCode::UNAUTHORIZED
+    }
+}
 
 #[derive(Deserialize)]
 struct DeleteRequest {
@@ -313,6 +335,7 @@ println!("Filesystem sync check complete!");
             "/api/upload", 
             post(upload_image).layer(DefaultBodyLimit::max(200 * 1024 * 1024))
         )
+        .route("/api/auth/verify", post(verify_password))
         .route("/api/images/assign_album", post(assign_album_to_existing_image))
         .route("/api/scan", post(trigger_scan_handler))
         .route("/api/ws", get(ws_handler))
@@ -332,56 +355,79 @@ println!("Filesystem sync check complete!");
 
 
 
-async fn upload_image(
+ async fn upload_image(
     State(state): State<AppState>,
     mut multipart: Multipart,
 ) -> impl IntoResponse {
-    let mut password_provided = String::new();
+    //let mut password_provided = String::new();
     let mut album_tag: Option<String> = None;
+    let mut is_authenticated = false;
+    // Explicitly define Vec with String to fix the `str` Sized compiler error
+    let mut pending_files: Vec<(String, Bytes)> = Vec::new();
     let mut queued_files = Vec::new();
 
-    // 🚀 Stream chunks directly to disk (Zero in-memory buffering)
     while let Ok(Some(field)) = multipart.next_field().await {
         let name = field.name().unwrap_or("").to_string();
         match name.as_str() {
             "password" => {
-                if let Ok(text) = field.text().await { 
-                    password_provided = text; 
+                if let Ok(text) = field.text().await {
+                   let password_provided = text.trim().to_string();
+                    if password_provided == state.master_password {
+                        is_authenticated = true;
+
+                        // Flush buffered files saved before password field arrived
+                        for (filename, bytes_data) in pending_files.drain(..) {
+                            if let Some(file_info) = save_file_to_disk(&state, &filename, bytes_data).await {
+                                queued_files.push(file_info);
+                            }
+                        }
+                    } else {
+                        return (StatusCode::UNAUTHORIZED, "Incorrect master password").into_response();
+                    }
                 }
             }
             "album" => {
                 if let Ok(text) = field.text().await {
                     let text_val = text.trim().to_string();
-                    if !text_val.is_empty() { album_tag = Some(text_val); }
+                    if !text_val.is_empty() {
+                        album_tag = Some(text_val);
+                    }
                 }
             }
             "image" | "images" | "files" | "file" => {
                 let filename = field.file_name().unwrap_or("uploaded.bin").to_string();
-                if filename.is_empty() { continue; }
+                if filename.is_empty() {
+                    continue;
+                }
 
-                let timestamp = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs() as i64;
+                if is_authenticated {
+                    let timestamp = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs() as i64;
 
-                let unique_filename = format!("{}_{}", timestamp, filename);
-                let save_path = PathBuf::from(&state.images_dir).join(&unique_filename);
+                    let unique_filename = format!("{}_{}", timestamp, filename);
+                    let save_path = PathBuf::from(&state.images_dir).join(&unique_filename);
 
-                // Stream field payload directly to file
-                if let Ok(mut file) = tokio::fs::File::create(&save_path).await {
-                    let mut file_size: i64 = 0;
-                    let mut field = field; // mutable handle for chunk iteration
+                    if let Ok(mut file) = tokio::fs::File::create(&save_path).await {
+                        let mut file_size: i64 = 0;
+                        let mut field_stream = field;
 
-                    while let Ok(Some(chunk)) = field.chunk().await {
-                        if file.write_all(&chunk).await.is_ok() {
-                            file_size += chunk.len() as i64;
-                        } else {
-                            break;
+                        while let Ok(Some(chunk)) = field_stream.chunk().await {
+                            if file.write_all(&chunk).await.is_ok() {
+                                file_size += chunk.len() as i64;
+                            } else {
+                                break;
+                            }
+                        }
+
+                        if file_size > 0 {
+                            queued_files.push((unique_filename, save_path, file_size));
                         }
                     }
-
-                    if file_size > 0 {
-                        queued_files.push((unique_filename, save_path, file_size));
+                } else {
+                    if let Ok(bytes_data) = field.bytes().await {
+                        pending_files.push((filename, bytes_data));
                     }
                 }
             }
@@ -389,7 +435,7 @@ async fn upload_image(
         }
     }
 
-    if password_provided != state.master_password {
+    if !is_authenticated {
         return (StatusCode::UNAUTHORIZED, "Incorrect master password").into_response();
     }
 
@@ -399,154 +445,193 @@ async fn upload_image(
 
     let clean_album = album_tag.unwrap_or_default();
 
-    // 🎯 Spawn background thumbnail & database task
+    // Spawn background thumbnail & database task
     let state_clone = state.clone();
     let album_clone = clean_album.clone();
 
-  
     tokio::spawn(async move {
-    for (unique_filename, save_path, file_size) in queued_files {
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
+        for (unique_filename, save_path, file_size) in queued_files {
+            let timestamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64;
 
-        let clean_stem = unique_filename
-            .rfind('.')
-            .map(|p| unique_filename[..p].to_string())
-            .unwrap_or_else(|| unique_filename.clone());
-        
-        let thumb_path = PathBuf::from(&state_clone.thumbnails_dir).join(format!("{}.jpg", clean_stem));
-        let semaphore = state_clone.cpu_semaphore.clone();
+            let clean_stem = unique_filename
+                .rfind('.')
+                .map(|p| unique_filename[..p].to_string())
+                .unwrap_or_else(|| unique_filename.clone());
 
-        let ext = unique_filename
-            .rsplit('.')
-            .next()
-            .unwrap_or("")
-            .to_lowercase();
-            
-        let is_video = matches!(ext.as_str(), "mp4" | "webm" | "mov" | "mkv" | "avi");
-        let filename_for_log = unique_filename.clone();
-        let images_dir_clone = state_clone.images_dir.clone();
+            let thumb_path =
+                PathBuf::from(&state_clone.thumbnails_dir).join(format!("{}.jpg", clean_stem));
+            let semaphore = state_clone.cpu_semaphore.clone();
 
-        let mut final_media_filename = unique_filename.clone();
+            let ext = unique_filename
+                .rsplit('.')
+                .next()
+                .unwrap_or("")
+                .to_lowercase();
 
-        let task_result = tokio::task::spawn_blocking(move || {
-            let _permit = semaphore.try_acquire();
-            
-            if is_video {
-                // 🎬 Extract Thumbnail Frame
-                let status = Command::new("ffmpeg")
-                    .args(&[
-                        "-y",
-                        "-ss", "00:00:00",
-                        "-i", save_path.to_str().unwrap_or_default(),
-                        "-vframes", "1",
-                        "-vf", "scale=400:-1",
-                        "-update", "1",
-                        "-loglevel", "error",
-                        thumb_path.to_str().unwrap_or_default(),
-                    ])
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status();
+            let is_video = matches!(ext.as_str(), "mp4" | "webm" | "mov" | "mkv" | "avi");
+            let filename_for_log = unique_filename.clone();
+            let images_dir_clone = state_clone.images_dir.clone();
 
-                if status.is_err() || !status.unwrap().success() {
-                    eprintln!("⚠️ FFmpeg thumbnail extraction failed for {}", filename_for_log);
-                }
+            let mut final_media_filename = unique_filename.clone();
 
-                // 🎬 Transcode MOV to browser-compatible MP4 (H.264 / YUV420P)
-                if ext == "mov" {
-                    let mp4_filename = format!("{}.mp4", clean_stem);
-                    let target_mp4_path = PathBuf::from(&images_dir_clone).join(&mp4_filename);
+            let task_result = tokio::task::spawn_blocking(move || {
+                let _permit = semaphore.try_acquire();
 
-                    let transcode_status = Command::new("ffmpeg")
+                if is_video {
+                    let status = Command::new("ffmpeg")
                         .args(&[
                             "-y",
-                            "-i", save_path.to_str().unwrap_or_default(),
-                            "-c:v", "libx264",         // Standard browser H.264
-                            "-pix_fmt", "yuv420p",     // Required for mobile browser decoding
-                            "-preset", "ultrafast",    // Optimization for Termux CPU
-                            "-crf", "26",
-                            "-c:a", "aac",             // Standard AAC audio
-                            "-movflags", "+faststart", // Fast Web start
-                            target_mp4_path.to_str().unwrap_or_default(),
+                            "-ss",
+                            "00:00:00",
+                            "-i",
+                            save_path.to_str().unwrap_or_default(),
+                            "-vframes",
+                            "1",
+                            "-vf",
+                            "scale=400:-1",
+                            "-update",
+                            "1",
+                            "-loglevel",
+                            "error",
+                            thumb_path.to_str().unwrap_or_default(),
                         ])
                         .stdout(Stdio::null())
                         .stderr(Stdio::null())
                         .status();
 
-                    if let Ok(st) = transcode_status {
-                        if st.success() {
-                            // Delete original raw .mov file
-                            let _ = std::fs::remove_file(&save_path);
-                            return mp4_filename;
-                        }
+                    if status.is_err() || !status.unwrap().success() {
+                        eprintln!(
+                            "⚠️ FFmpeg thumbnail extraction failed for {}",
+                            filename_for_log
+                        );
                     }
-                    eprintln!("⚠️ FFmpeg transcode failed for MOV, keeping original.");
+
+                    if ext == "mov" {
+                        let mp4_filename = format!("{}.mp4", clean_stem);
+                        let target_mp4_path =
+                            PathBuf::from(&images_dir_clone).join(&mp4_filename);
+
+                        let transcode_status = Command::new("ffmpeg")
+                            .args(&[
+                                "-y",
+                                "-i",
+                                save_path.to_str().unwrap_or_default(),
+                                "-c:v",
+                                "libx264",
+                                "-pix_fmt",
+                                "yuv420p",
+                                "-preset",
+                                "ultrafast",
+                                "-crf",
+                                "26",
+                                "-c:a",
+                                "aac",
+                                "-movflags",
+                                "+faststart",
+                                target_mp4_path.to_str().unwrap_or_default(),
+                            ])
+                            .stdout(Stdio::null())
+                            .stderr(Stdio::null())
+                            .status();
+
+                        if let Ok(st) = transcode_status {
+                            if st.success() {
+                                let _ = std::fs::remove_file(&save_path);
+                                return mp4_filename;
+                            }
+                        }
+                        eprintln!("⚠️ FFmpeg transcode failed for MOV, keeping original.");
+                    }
+                } else {
+                    generate_oriented_thumbnail(&save_path, &thumb_path);
                 }
-            } else {
-                generate_oriented_thumbnail(&save_path, &thumb_path);
+
+                unique_filename
+            })
+            .await;
+
+            if let Ok(res_name) = task_result {
+                final_media_filename = res_name;
             }
 
-            unique_filename
-        }).await;
+            let insert_res = sqlx::query(
+                "INSERT INTO images (filename, created_at, file_size) VALUES (?, ?, ?);",
+            )
+            .bind(&final_media_filename)
+            .bind(timestamp)
+            .bind(file_size)
+            .execute(&state_clone.db)
+            .await;
 
-        if let Ok(res_name) = task_result {
-            final_media_filename = res_name;
-        }
+            if let Ok(result) = insert_res {
+                let image_id = result.last_insert_rowid();
 
-        // Insert into SQLite database using final filename (.mp4 if converted)
-        let insert_res = sqlx::query(
-            "INSERT INTO images (filename, created_at, file_size) VALUES (?, ?, ?);"
-        )
-        .bind(&final_media_filename)
-        .bind(timestamp)
-        .bind(file_size)
-        .execute(&state_clone.db)
-        .await;
+                if !album_clone.is_empty() {
+                    let _ = sqlx::query("INSERT OR IGNORE INTO albums (name) VALUES (?);")
+                        .bind(&album_clone)
+                        .execute(&state_clone.db)
+                        .await;
 
-        if let Ok(result) = insert_res {
-            let image_id = result.last_insert_rowid();
-
-            if !album_clone.is_empty() {
-                let _ = sqlx::query("INSERT OR IGNORE INTO albums (name) VALUES (?);")
-                    .bind(&album_clone)
-                    .execute(&state_clone.db)
-                    .await;
-
-                if let Ok(row) = sqlx::query("SELECT id FROM albums WHERE name = ?;")
-                    .bind(&album_clone)
-                    .fetch_one(&state_clone.db)
-                    .await
-                {
-                    let album_id: i64 = row.get(0);
-                    let _ = sqlx::query("INSERT OR IGNORE INTO image_albums (image_id, album_id) VALUES (?, ?);")
+                    if let Ok(row) = sqlx::query("SELECT id FROM albums WHERE name = ?;")
+                        .bind(&album_clone)
+                        .fetch_one(&state_clone.db)
+                        .await
+                    {
+                        let album_id: i64 = row.get(0);
+                        let _ = sqlx::query(
+                            "INSERT OR IGNORE INTO image_albums (image_id, album_id) VALUES (?, ?);",
+                        )
                         .bind(image_id)
                         .bind(album_id)
                         .execute(&state_clone.db)
                         .await;
+                    }
                 }
+
+                let response_payload = UploadResponse {
+                    action: "upload".to_string(),
+                    filename: final_media_filename,
+                    album: album_clone.clone(),
+                };
+
+                let _ = state_clone.tx.send(response_payload);
             }
-
-            // Broadcast real-time update over WebSocket
-            let response_payload = UploadResponse {
-                action: "upload".to_string(),
-                filename: final_media_filename,
-                album: album_clone.clone(),
-            };
-
-            let _ = state_clone.tx.send(response_payload);
         }
-    }
-});
-
-
-
-
+    });
 
     (StatusCode::OK, Json(serde_json::json!({ "status": "queued" }))).into_response()
 }
+
+// Updated helper using `axum::body::Bytes`
+async fn save_file_to_disk(
+    state: &AppState,
+    filename: &str,
+    bytes_data: Bytes,
+) -> Option<(String, PathBuf, i64)> {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+
+    let unique_filename = format!("{}_{}", timestamp, filename);
+    let save_path = PathBuf::from(&state.images_dir).join(&unique_filename);
+
+    if let Ok(mut file) = tokio::fs::File::create(&save_path).await {
+        let file_size = bytes_data.len() as i64;
+        if file.write_all(&bytes_data).await.is_ok() && file_size > 0 {
+            return Some((unique_filename, save_path, file_size));
+        }
+    }
+    None
+}
+
+
+
+
+
 
 
 
@@ -604,27 +689,15 @@ async fn get_images_json(
     let offset = pagination.offset as i64;
     let limit = pagination.limit as i64;
 
-    // 1. SELECT both the filename and its matching album name dynamically
-    // let mut query_str = "
-    //     SELECT i.filename, COALESCE(a.name, '') as album_name 
-    //     FROM images i
-    //     LEFT JOIN image_albums ia ON i.id = ia.image_id
-    //     LEFT JOIN albums a ON ia.album_id = a.id
-    //     WHERE 1=1
-    // ".to_string();
-
-  let mut query_str = "
+    let mut query_str = "
         SELECT 
             i.filename,
-            COALESCE(a.name, '') as album_name ,
-            COUNT(*) OVER() as total_count
+            COALESCE(a.name, '') as album_name
         FROM images i
         LEFT JOIN image_albums ia ON i.id = ia.image_id
         LEFT JOIN albums a ON ia.album_id = a.id
         WHERE 1=1
     ".to_string();
-
-
 
     // Append filters
     if let Some(ref alb) = pagination.album {
@@ -639,11 +712,14 @@ async fn get_images_json(
     if pagination.max_size.is_some() { query_str.push_str(" AND i.file_size <= ?"); }
 
     let sort_order = pagination.sort.as_deref().unwrap_or("recent");
-    if sort_order == "oldest" { query_str.push_str(" ORDER BY i.created_at ASC, i.id ASC"); }
-    else { query_str.push_str(" ORDER BY i.created_at DESC, i.id DESC"); }
+    if sort_order == "oldest" { 
+        query_str.push_str(" ORDER BY i.created_at ASC, i.id ASC"); 
+    } else { 
+        query_str.push_str(" ORDER BY i.created_at DESC, i.id DESC"); 
+    }
     query_str.push_str(" LIMIT ? OFFSET ?;");
 
-    // Bind arguments
+    // Bind parameters for data query
     let mut db_query = sqlx::query(&query_str);
     if let Some(ref alb) = pagination.album {
         if alb != "all" && !alb.is_empty() { db_query = db_query.bind(alb); }
@@ -653,9 +729,11 @@ async fn get_images_json(
     if let Some(max) = pagination.max_size { db_query = db_query.bind(max); }
     db_query = db_query.bind(limit).bind(offset);
 
-    let rows = db_query.fetch_all(&state.db).await.unwrap();
+    let rows = match db_query.fetch_all(&state.db).await {
+        Ok(r) => r,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
     
-    // 🆕 Map rows into our new structural ImageItem format
     let images: Vec<ImageItem> = rows.iter().map(|r| {
         ImageItem {
             filename: r.get::<String, _>("filename"),
@@ -663,7 +741,7 @@ async fn get_images_json(
         }
     }).collect();
 
-    // 2. Count query for pagination tracking
+    // Count total matched records for accurate pagination status
     let mut count_str = "
         SELECT COUNT(DISTINCT i.id) 
         FROM images i
@@ -671,8 +749,6 @@ async fn get_images_json(
         LEFT JOIN albums a ON ia.album_id = a.id
         WHERE 1=1
     ".to_string();
-
-
 
     if let Some(ref alb) = pagination.album {
         if alb != "all" && !alb.is_empty() { count_str.push_str(" AND a.name = ?"); }
@@ -690,12 +766,11 @@ async fn get_images_json(
     if let Some(min) = pagination.min_size { count_query = count_query.bind(min); }
     if let Some(max) = pagination.max_size { count_query = count_query.bind(max); }
     
-    let total_count: i64 = count_query.fetch_one(&state.db).await.unwrap().get(0);
+    let total_count: i64 = count_query.fetch_one(&state.db).await.map(|r| r.get(0)).unwrap_or(0);
     let has_more = (offset + images.len() as i64) < total_count;
 
     Json(ImageList { images, has_more }).into_response()
 }
-
 
 
 

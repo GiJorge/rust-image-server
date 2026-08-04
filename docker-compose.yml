@@ -1,0 +1,15 @@
+services:
+  media-gallery:
+    build:
+      context: .
+      network: host
+    container_name: rust_media_gallery
+    ports:
+      - "3033:3033"
+    volumes:
+      - ./images:/app/images
+      - ./thumb:/app/thumb
+      - ./data:/app/data
+    restart: unless-stopped
+    environment:
+      - RUST_LOG=info
